@@ -226,6 +226,7 @@ Check ([In]::PidAt(512, 330) -eq $app.Id) "окно настроек повер�
 [In]::LeftClick(); Start-Sleep -Milliseconds 120
 $b = Grab; Save $b '08-settings-click'; $b.Dispose()
 Start-Sleep -Milliseconds 400
+Write-Host "  активно окно процесса: $([In]::ForegroundPid()) (программа: $($app.Id))"
 [In]::Keys(0x1B); Start-Sleep -Milliseconds 800
 $sw = @([In]::VisibleTitles($app.Id) | Where-Object { $_ -like '*настройки*' })
 Check ($sw.Count -eq 0) "Esc закрыл настройки"

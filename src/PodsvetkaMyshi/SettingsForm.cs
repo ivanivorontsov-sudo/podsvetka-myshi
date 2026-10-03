@@ -76,6 +76,8 @@ namespace PodsvetkaMyshi
             var btnCancel = new Button { Text = "Отмена", AutoSize = true, MinimumSize = new Size(90, 0), DialogResult = DialogResult.Cancel };
             btnDefaults.Click += (s, e) => { var d = new AppSettings { AutostartConfigured = original.AutostartConfigured }; LoadValues(d, chkAutostart.Checked); Changed(); };
             btnOk.Click += (s, e) => { Result = Collect(); AutostartResult = chkAutostart.Checked; DialogResult = DialogResult.OK; Close(); };
+            // Окно не модальное: DialogResult само его не закрывает — закрываем явно (и по Esc)
+            btnCancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             buttons.Controls.Add(btnDefaults);
             buttons.Controls.Add(new Label { Width = 30 });
             buttons.Controls.Add(btnOk);
