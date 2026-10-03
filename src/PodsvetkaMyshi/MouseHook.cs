@@ -50,6 +50,7 @@ namespace PodsvetkaMyshi
             hook = SetWindowsHookEx(WH_MOUSE_LL, proc, Native.GetModuleHandle(null), 0);
             LastError = hook == IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
             Installed = hook != IntPtr.Zero;
+            Interlocked.Exchange(ref lastEventMs, Clock.NowMs); // отсчёт «молчания» — с момента установки
             if (!Installed) Log.Write("Перехватчик мыши не установлен, код " + LastError);
         }
 

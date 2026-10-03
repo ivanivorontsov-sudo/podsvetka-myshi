@@ -61,6 +61,8 @@ namespace PodsvetkaMyshi
         [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
         [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT pt);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int pid);
+        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")] public static extern bool PeekMessage(out MSG msg, IntPtr hwnd, uint min, uint max, uint remove);
         [DllImport("user32.dll")] public static extern int GetMessage(out MSG msg, IntPtr hwnd, uint min, uint max);

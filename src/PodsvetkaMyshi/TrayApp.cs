@@ -111,7 +111,12 @@ namespace PodsvetkaMyshi
         {
             if (settingsForm != null && !settingsForm.IsDisposed)
             {
-                try { settingsForm.WindowState = FormWindowState.Normal; settingsForm.Activate(); } catch { }
+                try
+                {
+                    settingsForm.WindowState = FormWindowState.Normal;
+                    settingsForm.TopMost = true; settingsForm.Activate(); settingsForm.TopMost = false;
+                }
+                catch { }
                 return;
             }
             Safe("Настройки", () =>
@@ -134,8 +139,15 @@ namespace PodsvetkaMyshi
                         }
                         else overlay.Apply(settings);
                     });
+                    // Поверх остальных окон, даже если Windows не даёт активировать окно другой программы
+                    f.Shown += (s, e) => Safe("Настройки", () =>
+                    {
+                        f.TopMost = true;
+                        f.Activate();
+                        Native.SetForegroundWindow(f.Handle);
+                        invoker.BeginInvoke(new Action(() => { try { if (!f.IsDisposed) f.TopMost = false; } catch { } }));
+                    });
                     f.Show();
-                    f.Activate();
                 }
             });
         }

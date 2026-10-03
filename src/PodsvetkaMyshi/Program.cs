@@ -123,6 +123,7 @@ namespace PodsvetkaMyshi
         {
             try
             {
+                try { Native.AllowSetForegroundWindow(-1 /*ASFW_ANY*/); } catch { } // чтобы окно настроек вышло на передний план
                 using (var ev = EventWaitHandle.OpenExisting(@"Local\" + Id + "-" + name)) ev.Set();
                 return true;
             }

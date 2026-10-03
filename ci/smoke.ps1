@@ -24,6 +24,12 @@ public static class In {
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
   public static int PidAt(int x, int y) { var p = new POINT { X = x, Y = y }; int pid; GetWindowThreadProcessId(WindowFromPoint(p), out pid); return pid; }
   public static int ForegroundPid() { int pid; GetWindowThreadProcessId(GetForegroundWindow(), out pid); return pid; }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder sb, int max);
+  public static List<string> VisibleTitles(int pid) {
+    var r = new List<string>();
+    EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) { var sb = new System.Text.StringBuilder(256); GetWindowText(h, sb, 256); r.Add(sb.ToString()); } return true; }, IntPtr.Zero);
+    return r;
+  }
   public static List<int> VisibleExStyles(int pid) {
     var r = new List<int>();
     EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) r.Add(GetWindowLong(h, -20)); return true; }, IntPtr.Zero);
@@ -53,6 +59,8 @@ public static class In {
     SelectObject(mdc, old); DeleteDC(mdc); ReleaseDC(IntPtr.Zero, sdc);
     return bmp;
   }
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr e);
+  public static void Keys(byte vk) { keybd_event(vk, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(40); keybd_event(vk, 0, 2, UIntPtr.Zero); }
   public static void RightClick() { mouse_event(8, 0, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(40); mouse_event(16, 0, 0, 0, UIntPtr.Zero); }
 }
 "@
@@ -209,8 +217,17 @@ $p2 = Start-Process $exe -ArgumentList @('--config-dir', "`"$cfgA`"", '--setting
 $p2.WaitForExit(5000) | Out-Null
 Check ($p2.HasExited) "второй экземпляр сразу завершился (передал команду первому)"
 Start-Sleep -Seconds 2
-[In]::Glide(520, 400, 560, 420, 10); Start-Sleep -Milliseconds 300
+$sw = @([In]::VisibleTitles($app.Id) | Where-Object { $_ -like '*настройки*' })
+Check ($sw.Count -eq 1) "окно настроек открылось"
+[In]::Glide(520, 400, 512, 330, 10); Start-Sleep -Milliseconds 300
 $b = Grab; Save $b '08-settings'; $b.Dispose()
+Check ([In]::PidAt(512, 330) -eq $app.Id) "окно настроек поверх остальных"
+[In]::LeftClick(); Start-Sleep -Milliseconds 120
+$b = Grab; Save $b '08-settings-click'; $b.Dispose()
+[In]::Keys(0x1B); Start-Sleep -Milliseconds 800
+$sw = @([In]::VisibleTitles($app.Id) | Where-Object { $_ -like '*настройки*' })
+Check ($sw.Count -eq 0) "Esc закрыл настройки"
+Check (-not $app.HasExited) "после закрытия настроек программа работает"
 Check (@(Get-Process PodsvetkaMyshi -ErrorAction SilentlyContinue).Count -eq 1) "запущен ровно один экземпляр"
 $p3 = Start-Process $exe -ArgumentList @('--autostart') -PassThru; $p3.WaitForExit(5000) | Out-Null
 Check ($p3.HasExited -and $p3.ExitCode -eq 0) "--autostart при уже запущенной программе молча выходит"
