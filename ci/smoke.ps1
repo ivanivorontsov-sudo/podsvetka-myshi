@@ -37,6 +37,22 @@ public static class In {
     for (int i = 1; i <= steps; i++) { MoveAbs(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps); System.Threading.Thread.Sleep(12); }
   }
   public static void LeftClick() { mouse_event(2, 0, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(40); mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
+  [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleBitmap(IntPtr dc, int w, int h);
+  [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+  [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr o);
+  [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr d, int x, int y, int w, int h, IntPtr s, int x1, int y1, int rop);
+  // Снимок экрана с CAPTUREBLT (включая прозрачные layered-окна)
+  public static IntPtr GrabHbitmap(int w, int h) {
+    IntPtr sdc = GetDC(IntPtr.Zero), mdc = CreateCompatibleDC(sdc), bmp = CreateCompatibleBitmap(sdc, w, h);
+    IntPtr old = SelectObject(mdc, bmp);
+    BitBlt(mdc, 0, 0, w, h, sdc, 0, 0, 0x00CC0020 | 0x40000000);
+    SelectObject(mdc, old); DeleteDC(mdc); ReleaseDC(IntPtr.Zero, sdc);
+    return bmp;
+  }
   public static void RightClick() { mouse_event(8, 0, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(40); mouse_event(16, 0, 0, 0, UIntPtr.Zero); }
 }
 "@
@@ -46,10 +62,9 @@ $W = [In]::GetSystemMetrics(0); $H = [In]::GetSystemMetrics(1)
 Write-Host "Экран: ${W}x${H}, Windows $([Environment]::OSVersion.Version)"
 
 function Grab() {
-  $b = New-Object System.Drawing.Bitmap($W, $H)
-  $g = [System.Drawing.Graphics]::FromImage($b)
-  $g.CopyFromScreen(0, 0, 0, 0, $b.Size, [System.Drawing.CopyPixelOperation]::SourceCopy -bor [System.Drawing.CopyPixelOperation]::CaptureBlt)
-  $g.Dispose(); return $b
+  $hb = [In]::GrabHbitmap($W, $H)
+  try { $tmp = [System.Drawing.Image]::FromHbitmap($hb); $b = New-Object System.Drawing.Bitmap $tmp; $tmp.Dispose() } finally { [In]::DeleteObject($hb) | Out-Null }
+  return $b
 }
 # Снимок экрана не содержит курсор — дорисовываем стрелку в точке курсора (только для наглядности картинок)
 function WithCursor($bmp) {
