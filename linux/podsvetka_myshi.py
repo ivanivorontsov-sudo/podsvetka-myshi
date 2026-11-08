@@ -31,7 +31,7 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 110, "glow_alpha": 35, "click_effect": True,
@@ -450,18 +450,50 @@ class App:
         return None
 
     def _invoke_kwin_mouseclick_toggle(self):
-        """Invoke KWin's real mouse-click animation action (not a global input hook)."""
+        """Invoke the version-specific KWin action object name.
+
+        KWin 6.3 renamed the action object from ToggleMouseClick to
+        ToggleMouseClickAnimation. invokeShortcut() silently ignores unknown
+        action names on some releases, so trying aliases in a loop is unsafe:
+        it can report success without toggling the effect.
+        """
         obj = self.dbus_bus.get_object("org.kde.kglobalaccel", "/component/kwin")
         iface = self.dbus.Interface(obj, "org.kde.kglobalaccel.Component")
-        errors = []
-        for action in ("ToggleMouseClick", "Toggle Mouse Click Animation", "Toggle Mouse Click Effect"):
+        version_text = ""
+        for executable in ("kwin_wayland", "kwin_x11", "kwin"):
+            path = shutil.which(executable)
+            if not path:
+                continue
             try:
-                iface.invokeShortcut(action)
-                time.sleep(0.18)
-                return
+                result = subprocess.run(
+                    [path, "--version"], check=False, capture_output=True,
+                    text=True, timeout=2,
+                )
+                version_text = (result.stdout + " " + result.stderr).strip()
+                if version_text:
+                    break
             except Exception as exc:
-                errors.append(str(exc))
-        raise RuntimeError("Не удалось переключить эффект KWin: " + "; ".join(errors))
+                log("Не удалось определить версию KWin через " + executable, exc)
+        match = re.search(r"\\b(\\d+)\\.(\\d+)", version_text)
+        if not match:
+            raise RuntimeError(
+                "Не удалось определить версию KWin для переключения анимации. "
+                "Вывод команды: " + (version_text or "(пусто)")
+            )
+        major, minor = int(match.group(1)), int(match.group(2))
+        action = (
+            "ToggleMouseClickAnimation"
+            if major > 6 or (major == 6 and minor >= 3)
+            else "ToggleMouseClick"
+        )
+        try:
+            iface.invokeShortcut(action)
+            time.sleep(0.25)
+            log("Вызвана команда KWin " + action + " (" + version_text + ")")
+        except Exception as exc:
+            raise RuntimeError(
+                "KWin не принял команду " + action + ": " + str(exc)
+            ) from exc
 
     def configure_kwin_mouseclick(self, enabled, persist=False):
         """
