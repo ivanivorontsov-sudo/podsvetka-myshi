@@ -92,7 +92,7 @@ jobs:
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.0.8"
+          VERSION="1.0.9"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi" "$PKG/usr/share/kwin/scripts/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
