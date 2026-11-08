@@ -941,7 +941,7 @@ def main():
                 "GTK не смог подключиться к графическому сеансу. "
                 "Проверьте DISPLAY, WAYLAND_DISPLAY и запуск из меню рабочего стола."
             )
-        app = App(open_settings=not args.autostart)
+        app = App(open_settings=args.settings)
         app.lock_handle = lock_handle
         Gtk.main()
     except Exception as exc:
