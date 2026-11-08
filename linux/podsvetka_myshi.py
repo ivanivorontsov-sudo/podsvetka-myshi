@@ -31,7 +31,7 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 110, "glow_alpha": 35, "click_effect": True,
