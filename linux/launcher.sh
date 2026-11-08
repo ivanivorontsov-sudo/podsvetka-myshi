@@ -3,6 +3,9 @@
 set -u
 PYTHON="/usr/bin/python3"
 APP="/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
+if [ ! -f "$APP" ]; then
+  APP="$HOME/.local/share/podsvetka-myshi/podsvetka_myshi.py"
+fi
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/podsvetka-myshi"
 LOG="$STATE_DIR/launcher.log"
 mkdir -p "$STATE_DIR" || exit 1
