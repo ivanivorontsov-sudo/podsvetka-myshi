@@ -210,6 +210,7 @@ class App:
         self.stop = threading.Event()
         self.server = None
         self.wayland_mode = WAYLAND_SESSION
+        self.dbus = None
         self.dbus_bus = None
         self.dbus_name = None
         self.kwin_receiver = None
@@ -319,6 +320,7 @@ class App:
             import dbus.service
             from dbus.mainloop.glib import DBusGMainLoop
 
+            self.dbus = dbus
             DBusGMainLoop(set_as_default=True)
             self.dbus_bus = dbus.SessionBus()
             self.dbus_name = dbus.service.BusName(
@@ -346,16 +348,18 @@ class App:
 
     def configure_kwin_script(self, enabled):
         """Install the per-user KWin script and toggle it only while the app runs."""
+        data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        target = data_home / "kwin" / "scripts" / "podsvetka-myshi"
         source = Path("/usr/share/kwin/scripts/podsvetka-myshi")
         if not source.is_dir():
             source = Path(__file__).resolve().parent / "kwin-script"
+        if not source.is_dir() and target.is_dir():
+            source = target
         if not (source / "metadata.json").is_file():
             raise RuntimeError("Не найден пакет KWin script: " + str(source))
-
-        data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-        target = data_home / "kwin" / "scripts" / "podsvetka-myshi"
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        if source.resolve() != target.resolve():
+            shutil.copytree(source, target, dirs_exist_ok=True)
 
         kwriteconfig = shutil.which("kwriteconfig6") or shutil.which("kwriteconfig5")
         if kwriteconfig:
