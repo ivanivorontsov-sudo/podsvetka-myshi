@@ -596,10 +596,10 @@ class App:
         log("Анимация щелчков KWin: " + ("включена" if enabled else "выключена"))
 
     def configure_kwin_script(self, enabled):
-        """Load or unload the cursor-position bridge directly through KWin scripting D-Bus."""
+        """Enable or disable the installed KWin package script by its plugin id."""
         data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-        target = data_home / "kwin" / "scripts" / "podsvetka-myshi"
-        source = Path("/usr/share/kwin/scripts/podsvetka-myshi")
+        target = data_home / "kwin" / "scripts" / APP
+        source = Path("/usr/share/kwin/scripts") / APP
         if not source.is_dir():
             source = Path(__file__).resolve().parent / "kwin-script"
         if not source.is_dir() and target.is_dir():
@@ -610,29 +610,40 @@ class App:
         if source.resolve() != target.resolve():
             shutil.copytree(source, target, dirs_exist_ok=True)
 
-        # Keep the script out of the global auto-load list. This app owns its
-        # lifetime and explicitly loads/unloads it with each process instance.
-        self._write_kwin_entries("Plugins", {"podsvetka-myshiEnabled": "false"})
-        self._kwin_interface().reconfigure()
         scripting_obj = self.dbus_bus.get_object("org.kde.KWin", "/Scripting")
         scripting = self.dbus.Interface(scripting_obj, "org.kde.kwin.Scripting")
-        loaded = bool(scripting.isScriptLoaded(APP))
+
+        # KWin's D-Bus loadScript export accepts only the file path on supported
+        # Plasma 6 builds. To retain the stable plugin id, register the script
+        # as a normal KPackage and let KWin discover it from metadata.json.
+        # The Plugins key is <KPlugin.Id>Enabled.
+        self._write_kwin_entries("Plugins", {APP + "Enabled": "true" if enabled else "false"})
+        self._kwin_interface().reconfigure()
+
         if enabled:
-            if loaded:
-                scripting.unloadScript(APP)
-                for _ in range(30):
-                    if not scripting.isScriptLoaded(APP):
-                        break
-                    time.sleep(0.05)
-            script_file = str(target / "contents" / "code" / "main.js")
-            script_id = int(scripting.loadScript(script_file, APP))
-            if script_id < 0 and not scripting.isScriptLoaded(APP):
-                raise RuntimeError("KWin отказался загрузить скрипт отслеживания курсора.")
+            # The config change normally starts the script loader itself;
+            # start() is also called explicitly for installations where the
+            # config watcher hasn't emitted yet. It is idempotent by plugin id.
             scripting.start()
-            log("KWin cursor bridge загружен, script id=" + str(script_id))
-        elif loaded:
+            for _ in range(60):
+                if bool(scripting.isScriptLoaded(APP)):
+                    log("KWin cursor bridge загружен как пакет " + APP)
+                    return
+                time.sleep(0.05)
+            raise RuntimeError(
+                "KWin не загрузил скрипт " + APP + " из "
+                + str(target / "metadata.json")
+                + ". Проверьте журнал KWin и пакетный metadata.json."
+            )
+
+        if bool(scripting.isScriptLoaded(APP)):
             scripting.unloadScript(APP)
-            log("KWin cursor bridge выгружен")
+        for _ in range(40):
+            if not bool(scripting.isScriptLoaded(APP)):
+                log("KWin cursor bridge выгружен")
+                return
+            time.sleep(0.05)
+        raise RuntimeError("KWin не подтвердил выгрузку скрипта " + APP + ".")
 
     def receive_cursor_position(self, x, y):
         now = time.monotonic()
