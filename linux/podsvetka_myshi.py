@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -30,12 +31,12 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
-    "glow_size": 150, "glow_alpha": 35, "click_effect": True,
+    "glow_size": 110, "glow_alpha": 35, "click_effect": True,
     "left_color": "#ff5252", "right_color": "#448aff",
-    "ring_radius": 100, "ring_alpha": 95, "ring_duration": 550, "ring_width": 3,
+    "ring_radius": 30, "ring_alpha": 85, "ring_duration": 420, "ring_width": 2,
 }
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or (Path.home() / ".cache" / APP))
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP
@@ -79,6 +80,7 @@ def rgb(value):
 def load_settings():
     data = dict(DEFAULTS)
     path = CONFIG / "settings.json"
+    loaded = {}
     if path.exists():
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -90,6 +92,19 @@ def load_settings():
                 path.replace(path.with_suffix(".json.broken"))
             except Exception:
                 pass
+    # Migrate only the previous app defaults; do not overwrite user choices.
+    schema = clamp(loaded.get("schema_version", 1), 1, 99, 1) if isinstance(loaded, dict) else 1
+    if schema < 2:
+        if loaded.get("ring_radius") == 100:
+            data["ring_radius"] = 30
+        if loaded.get("glow_size") == 150:
+            data["glow_size"] = 110
+    data["schema_version"] = 2
+    current_session = os.environ.get("XDG_SESSION_ID") or os.environ.get("WAYLAND_DISPLAY", "")
+    if data.get("_kwin_click_session", "") != current_session:
+        data["_kwin_click_effect_enabled"] = False
+    data["_kwin_click_session"] = current_session
+    data["_kwin_click_effect_enabled"] = bool(data.get("_kwin_click_effect_enabled", False))
     for key in ("enabled", "only_moving", "click_effect"):
         data[key] = bool(data.get(key, DEFAULTS[key]))
     for key in ("glow_color", "left_color", "right_color"):
@@ -261,6 +276,11 @@ class App:
         self.start_ipc()
         if self.wayland_mode:
             self.start_kwin_bridge()
+            try:
+                self.configure_kwin_mouseclick(self.cfg["click_effect"], persist=True)
+            except Exception as exc:
+                log("Не удалось включить анимацию щелчков KWin", exc)
+                self.message_error("Не удалось включить анимацию щелчков KWin: " + str(exc))
         GLib.timeout_add(8, self.tick)
         if open_settings:
             GLib.idle_add(self.settings_dialog)
@@ -346,8 +366,153 @@ class App:
                 + str(STATE / "app.log")
             ) from exc
 
+    def _write_kwin_entries(self, group, values):
+        """Update only the requested KWin keys, preserving the rest of kwinrc."""
+        kwriteconfig = shutil.which("kwriteconfig6") or shutil.which("kwriteconfig5")
+        if kwriteconfig:
+            for key, value in values.items():
+                subprocess.run(
+                    [kwriteconfig, "--file", "kwinrc", "--group", group,
+                     "--key", key, str(value)],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+            return
+
+        config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "kwinrc"
+        lines = config.read_text(encoding="utf-8").splitlines() if config.exists() else []
+        header = "[" + group + "]"
+        section_start = next(
+            (i for i, line in enumerate(lines) if line.strip().lower() == header.lower()),
+            None,
+        )
+        if section_start is None:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(header)
+            section_start = len(lines) - 1
+            section_end = len(lines)
+        else:
+            section_end = next(
+                (i for i in range(section_start + 1, len(lines))
+                 if lines[i].strip().startswith("[") and lines[i].strip().endswith("]")),
+                len(lines),
+            )
+        for key, value in values.items():
+            key_line = key + "=" + str(value)
+            found = next(
+                (i for i in range(section_start + 1, section_end)
+                 if lines[i].split("=", 1)[0].strip().lower() == key.lower()),
+                None,
+            )
+            if found is None:
+                lines.insert(section_end, key_line)
+                section_end += 1
+            else:
+                lines[found] = key_line
+        config.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix="kwinrc-", dir=str(config.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write("\n".join(lines) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_name, config)
+        finally:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+
+    def _kwin_interface(self):
+        obj = self.dbus_bus.get_object("org.kde.KWin", "/KWin")
+        return self.dbus.Interface(obj, "org.kde.KWin")
+
+    def _kwin_mouseclick_state(self):
+        """Read MouseClickEffect enabled state from KWin support information."""
+        try:
+            report = str(self._kwin_interface().supportInformation())
+        except Exception as exc:
+            log("Не удалось прочитать состояние эффекта Mouse Click Animation", exc)
+            return None
+
+        # KWin versions format the Effects section slightly differently.
+        lines = report.splitlines()
+        in_mouseclick = False
+        for line in lines:
+            if re.match(r"^\s*mouseclick\s*:?\s*$", line, re.IGNORECASE):
+                in_mouseclick = True
+                continue
+            if in_mouseclick:
+                if re.match(r"^\s*enabled\s*:\s*(true|false)\s*$", line, re.IGNORECASE):
+                    return re.search(r"(true|false)", line, re.IGNORECASE).group(1).lower() == "true"
+                if line.strip() and not line[:1].isspace() and line.strip().endswith(":"):
+                    in_mouseclick = False
+        return None
+
+    def _invoke_kwin_mouseclick_toggle(self):
+        """Invoke KWin's real mouse-click animation action (not a global input hook)."""
+        obj = self.dbus_bus.get_object("org.kde.kglobalaccel", "/component/kwin")
+        iface = self.dbus.Interface(obj, "org.kde.kglobalaccel.Component")
+        errors = []
+        for action in ("ToggleMouseClick", "Toggle Mouse Click Animation", "Toggle Mouse Click Effect"):
+            try:
+                iface.invokeShortcut(action)
+                time.sleep(0.18)
+                return
+            except Exception as exc:
+                errors.append(str(exc))
+        raise RuntimeError("Не удалось переключить эффект KWin: " + "; ".join(errors))
+
+    @staticmethod
+    def _kwin_color_with_alpha(color, alpha):
+        color = color_ok(color, "#ffffff")
+        return "#{:02x}{}".format(int(alpha * 255 / 100), color[1:])
+
+    def configure_kwin_mouseclick(self, enabled, persist=False):
+        """
+        Configure KWin's built-in Mouse Click Animation. KWin receives real
+        button events under Wayland and draws the animated rings itself.
+        """
+        if not self.wayland_mode or self.dbus_bus is None:
+            return
+
+        enabled = bool(enabled)
+        previous = bool(self.cfg.get("_kwin_click_effect_enabled", False))
+        if enabled:
+            alpha = self.cfg["ring_alpha"]
+            self._write_kwin_entries("Plugins", {"mouseclickEnabled": "true"})
+            self._write_kwin_entries("Effect-mouseclick", {
+                "color1": self._kwin_color_with_alpha(self.cfg["left_color"], alpha),
+                "color2": self._kwin_color_with_alpha("#ffffff", alpha),
+                "color3": self._kwin_color_with_alpha(self.cfg["right_color"], alpha),
+                "lineWidth": self.cfg["ring_width"],
+                "ringLife": self.cfg["ring_duration"],
+                "ringSize": self.cfg["ring_radius"],
+                "ringCount": 2,
+                "showText": "false",
+            })
+            self._kwin_interface().reconfigure()
+            time.sleep(0.16)
+
+        actual = self._kwin_mouseclick_state()
+        if actual is not None:
+            previous = actual
+        if previous != enabled:
+            self._invoke_kwin_mouseclick_toggle()
+            actual = self._kwin_mouseclick_state()
+            if actual is not None and actual != enabled:
+                raise RuntimeError("KWin не подтвердил включение/выключение анимации щелчков.")
+
+        self.cfg["_kwin_click_effect_enabled"] = enabled
+        self.cfg["_kwin_click_session"] = (
+            os.environ.get("XDG_SESSION_ID") or os.environ.get("WAYLAND_DISPLAY", "")
+        )
+        if persist:
+            save_settings(self.cfg)
+        log("Анимация щелчков KWin: " + ("включена" if enabled else "выключена"))
+
     def configure_kwin_script(self, enabled):
-        """Install the per-user KWin script and toggle it only while the app runs."""
+        """Load or unload the cursor-position bridge directly through KWin scripting D-Bus."""
         data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
         target = data_home / "kwin" / "scripts" / "podsvetka-myshi"
         source = Path("/usr/share/kwin/scripts/podsvetka-myshi")
@@ -361,43 +526,29 @@ class App:
         if source.resolve() != target.resolve():
             shutil.copytree(source, target, dirs_exist_ok=True)
 
-        kwriteconfig = shutil.which("kwriteconfig6") or shutil.which("kwriteconfig5")
-        if kwriteconfig:
-            subprocess.run(
-                [kwriteconfig, "--file", "kwinrc", "--group", "Plugins",
-                 "--key", "podsvetka-myshiEnabled", "true" if enabled else "false"],
-                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-        else:
-            # Minimal KConfig-compatible fallback, preserving unrelated entries.
-            config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "kwinrc"
-            lines = config.read_text(encoding="utf-8").splitlines() if config.exists() else []
-            section_start = next((i for i, line in enumerate(lines)
-                                  if line.strip().lower() == "[plugins]"), None)
-            key_line = "podsvetka-myshiEnabled=" + ("true" if enabled else "false")
-            if section_start is None:
-                lines.extend(["", "[Plugins]", key_line])
-            else:
-                section_end = next((i for i in range(section_start + 1, len(lines))
-                                    if lines[i].strip().startswith("[") and lines[i].strip().endswith("]")),
-                                   len(lines))
-                found = next((i for i in range(section_start + 1, section_end)
-                              if lines[i].split("=", 1)[0].strip() == "podsvetka-myshiEnabled"), None)
-                if found is None:
-                    lines.insert(section_end, key_line)
-                else:
-                    lines[found] = key_line
-            config.parent.mkdir(parents=True, exist_ok=True)
-            fd, temp_name = tempfile.mkstemp(prefix="kwinrc-", dir=str(config.parent))
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write("\n".join(lines) + "\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temp_name, config)
-
-        if self.dbus_bus is not None:
-            obj = self.dbus_bus.get_object("org.kde.KWin", "/KWin")
-            self.dbus.Interface(obj, "org.kde.KWin").reconfigure()
+        # Keep the script out of the global auto-load list. This app owns its
+        # lifetime and explicitly loads/unloads it with each process instance.
+        self._write_kwin_entries("Plugins", {"podsvetka-myshiEnabled": "false"})
+        self._kwin_interface().reconfigure()
+        scripting_obj = self.dbus_bus.get_object("org.kde.KWin", "/Scripting")
+        scripting = self.dbus.Interface(scripting_obj, "org.kde.kwin.Scripting")
+        loaded = bool(scripting.isScriptLoaded(APP))
+        if enabled:
+            if loaded:
+                scripting.unloadScript(APP)
+                for _ in range(30):
+                    if not scripting.isScriptLoaded(APP):
+                        break
+                    time.sleep(0.05)
+            script_file = str(target / "contents" / "code" / "main.js")
+            script_id = int(scripting.loadScript(script_file, APP))
+            if script_id < 0 and not scripting.isScriptLoaded(APP):
+                raise RuntimeError("KWin отказался загрузить скрипт отслеживания курсора.")
+            scripting.start()
+            log("KWin cursor bridge загружен, script id=" + str(script_id))
+        elif loaded:
+            scripting.unloadScript(APP)
+            log("KWin cursor bridge выгружен")
 
     def receive_cursor_position(self, x, y):
         now = time.monotonic()
@@ -427,6 +578,8 @@ class App:
             # Launching the menu entry a second time should reveal settings,
             # not silently do nothing while the background glow keeps running.
             self.settings_dialog()
+        elif cmd == "activate":
+            pass
         elif cmd == "quit":
             self.shutdown()
         elif cmd == "toggle":
@@ -479,14 +632,13 @@ class App:
         clicks = Gtk.CheckButton.new_with_label("Анимировать щелчки мыши")
         clicks.set_active(cfg["click_effect"])
         if self.wayland_mode:
-            clicks.set_sensitive(False)
             clicks.set_tooltip_text(
-                "В KDE Wayland KWin передаёт координаты курсора, но не события кнопок мыши."
+                "В KDE Wayland анимацию нажатий рисует встроенный эффект KWin."
             )
         grid.attach(clicks, 0, 5, 2, 1)
         left = color(cfg["left_color"])
         right = color(cfg["right_color"])
-        ring_size = scale(10, 300, cfg["ring_radius"])
+        ring_size = scale(8, 120, cfg["ring_radius"])
         ring_alpha = scale(5, 100, cfg["ring_alpha"])
         duration = scale(150, 3000, cfg["ring_duration"])
         width = scale(1, 12, cfg["ring_width"])
@@ -521,7 +673,16 @@ class App:
                 save_settings(cfg)
                 set_autostart(cfg["autostart"])
                 self.cfg = cfg
+                if self.wayland_mode:
+                    try:
+                        self.configure_kwin_mouseclick(cfg["click_effect"], persist=True)
+                    except Exception as exc:
+                        log("Ошибка применения настроек анимации KWin", exc)
+                        self.message_error(
+                            "Настройки сохранены, но KWin не применил анимацию щелчков: " + str(exc)
+                        )
                 self.rings.clear()
+                self.last_move = time.monotonic()
                 self.glow_pos = None
                 self.glow_on = False
                 self.window.queue_draw()
@@ -638,6 +799,10 @@ class App:
             pass
         if self.wayland_mode and self.dbus_bus is not None:
             try:
+                self.configure_kwin_mouseclick(False, persist=True)
+            except Exception as exc:
+                log("Не удалось выключить анимацию KWin при выходе", exc)
+            try:
                 self.configure_kwin_script(False)
             except Exception as exc:
                 log("Не удалось выключить KWin script при выходе", exc)
@@ -749,7 +914,9 @@ def main():
     if args.diagnose:
         return print_diagnostics()
 
-    cmd = "quit" if args.quit else "settings" if args.settings else "toggle" if args.toggle else "show"
+    # Send the long-supported "settings" command to existing pre-1.0.7
+    # background copies as well; older instances don't understand "show".
+    cmd = "quit" if args.quit else "settings" if args.settings or not args.autostart else "toggle" if args.toggle else "activate"
     if send_command(cmd, retries=10 if (args.quit or args.toggle or args.settings) else 1):
         return 0
     if args.quit or args.toggle:
@@ -771,7 +938,7 @@ def main():
                 "GTK не смог подключиться к графическому сеансу. "
                 "Проверьте DISPLAY, WAYLAND_DISPLAY и запуск из меню рабочего стола."
             )
-        app = App(open_settings=args.settings)
+        app = App(open_settings=not args.autostart)
         app.lock_handle = lock_handle
         Gtk.main()
     except Exception as exc:
