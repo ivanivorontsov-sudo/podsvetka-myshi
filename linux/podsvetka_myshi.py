@@ -474,7 +474,7 @@ class App:
                     break
             except Exception as exc:
                 log("Не удалось определить версию KWin через " + executable, exc)
-        match = re.search(r"\\b(\\d+)\\.(\\d+)", version_text)
+        match = re.search(r"\b(\d+)\.(\d+)", version_text)
         if not match:
             raise RuntimeError(
                 "Не удалось определить версию KWin для переключения анимации. "
