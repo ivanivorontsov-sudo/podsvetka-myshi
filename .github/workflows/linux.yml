@@ -39,7 +39,7 @@ jobs:
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.0.0"
+          VERSION="1.0.1"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
@@ -53,11 +53,12 @@ jobs:
           Type=Application
           Name=Подсветка мыши
           Comment=Подсветка курсора и круги при щелчке
-          Exec=podsvetka-myshi
+          Exec=/usr/bin/podsvetka-myshi
           Icon=input-mouse
           Terminal=false
           Categories=Utility;Accessibility;
           StartupNotify=false
+          DBusActivatable=false
           EOF
           install -m 644 LICENSE "$PKG/usr/share/doc/podsvetka-myshi/copyright"
           cat > "$PKG/DEBIAN/control" <<EOF
