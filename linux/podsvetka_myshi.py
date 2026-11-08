@@ -283,8 +283,10 @@ class App:
             self.server.listen(4)
             self.server.settimeout(0.5)
             threading.Thread(target=self.ipc_loop, daemon=True, name="podsvetka-ipc").start()
+            log("Управляющий сокет запущен: " + str(SOCKET))
         except Exception as exc:
             log("Не удалось открыть управляющий сокет", exc)
+            raise RuntimeError("Не удалось открыть локальный управляющий сокет " + str(SOCKET) + ": " + str(exc)) from exc
 
     def ipc_loop(self):
         while not self.stop.is_set():
