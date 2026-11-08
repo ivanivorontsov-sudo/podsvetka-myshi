@@ -941,9 +941,9 @@ def set_autostart(enabled):
 
 
 def self_test():
-    assert parse_kwin_mouseclick_state("mouseclick:\\nenabled: true\\n") is True
-    assert parse_kwin_mouseclick_state("mouseclick:\\nenabled: false\\n") is False
-    assert parse_kwin_mouseclick_state("mouseclick:\\nringSize: 18\\n") is None
+    assert parse_kwin_mouseclick_state("mouseclick:\nenabled: true\n") is True
+    assert parse_kwin_mouseclick_state("mouseclick:\nenabled: false\n") is False
+    assert parse_kwin_mouseclick_state("mouseclick:\nringSize: 18\n") is None
     assert ease_out(0) == 0 and ease_out(1) == 1
     assert 0 < ease_out(0.5) < 1
     assert clamp("120", 20, 400, 150) == 120
