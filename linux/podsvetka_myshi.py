@@ -7,12 +7,20 @@ import json
 import logging
 import math
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+# On KDE Wayland, render the transparent overlay through XWayland while KWin
+# supplies the real global cursor coordinates over the session D-Bus.
+WAYLAND_SESSION = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+if WAYLAND_SESSION:
+    os.environ["GDK_BACKEND"] = "x11"
 
 import cairo
 import gi
@@ -22,7 +30,7 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.0.0"
+VERSION = "1.0.5"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 150, "glow_alpha": 35, "click_effect": True,
@@ -201,13 +209,22 @@ class App:
         self.running = True
         self.stop = threading.Event()
         self.server = None
+        self.wayland_mode = WAYLAND_SESSION
+        self.dbus_bus = None
+        self.dbus_name = None
+        self.kwin_receiver = None
 
-        display_name = Gdk.Display.get_default().get_name()
-        if "wayland" in display_name.lower():
+        display = Gdk.Display.get_default()
+        display_name = display.get_name() if display else ""
+        if self.wayland_mode and not os.environ.get("DISPLAY"):
             raise RuntimeError(
-                "Обнаружен Wayland. Эта реализация рассчитана на X11/Xorg. "
-                "В Wayland глобальное отслеживание курсора и click-through overlay "
-                "управляются композитором. Войдите в сеанс Xorg."
+                "Для подсветки в KDE Wayland нужен XWayland. "
+                "Перезапустите сеанс Plasma с установленным пакетом xwayland."
+            )
+        if not self.wayland_mode and "wayland" in display_name.lower():
+            raise RuntimeError(
+                "GTK подключился напрямую к Wayland вместо XWayland. "
+                "Проверьте наличие XWayland и переменную DISPLAY."
             )
         self.xdisplay = xdisplay.Display()
         self.root = self.xdisplay.screen().root
@@ -229,13 +246,20 @@ class App:
         self.resize_window()
         self.window.realize()
         gdk_window = self.window.get_window()
-        gdk_window.set_override_redirect(True)
+        if not self.wayland_mode:
+            gdk_window.set_override_redirect(True)
+        else:
+            # A managed XWayland surface can be placed in KWin's above layer;
+            # override-redirect would bypass KWin's stacking policy.
+            self.window.set_keep_above(True)
         gdk_window.set_pass_through(True)
         self.window.input_shape_combine_region(cairo.Region())
         self.window.show_all()
 
         self.create_tray()
         self.start_ipc()
+        if self.wayland_mode:
+            self.start_kwin_bridge()
         GLib.timeout_add(8, self.tick)
         if open_settings:
             GLib.idle_add(self.settings_dialog)
@@ -287,6 +311,96 @@ class App:
         except Exception as exc:
             log("Не удалось открыть управляющий сокет", exc)
             raise RuntimeError("Не удалось открыть локальный управляющий сокет " + str(SOCKET) + ": " + str(exc)) from exc
+
+    def start_kwin_bridge(self):
+        """Bridge KWin's compositor-owned cursor coordinates into the XWayland overlay."""
+        try:
+            import dbus
+            import dbus.service
+            from dbus.mainloop.glib import DBusGMainLoop
+
+            DBusGMainLoop(set_as_default=True)
+            self.dbus_bus = dbus.SessionBus()
+            self.dbus_name = dbus.service.BusName(
+                "org.podsvetka.Myshi", bus=self.dbus_bus, do_not_queue=True
+            )
+            app = self
+
+            class CursorReceiver(dbus.service.Object):
+                @dbus.service.method(
+                    "org.podsvetka.Myshi", in_signature="ii", out_signature=""
+                )
+                def SetCursorPosition(self, x, y):
+                    GLib.idle_add(app.receive_cursor_position, int(x), int(y))
+
+            self.kwin_receiver = CursorReceiver(self.dbus_bus, "/org/podsvetka/Myshi")
+            self.configure_kwin_script(True)
+            log("Мост KDE/KWin Wayland запущен через D-Bus")
+        except Exception as exc:
+            log("Не удалось запустить мост KDE/KWin Wayland", exc)
+            raise RuntimeError(
+                "Не удалось включить поддержку KDE Wayland. Нужны KDE Plasma/KWin, "
+                "XWayland и пакет python3-dbus. Подробности: "
+                + str(STATE / "app.log")
+            ) from exc
+
+    def configure_kwin_script(self, enabled):
+        """Install the per-user KWin script and toggle it only while the app runs."""
+        source = Path("/usr/share/kwin/scripts/podsvetka-myshi")
+        if not source.is_dir():
+            source = Path(__file__).resolve().parent / "kwin-script"
+        if not (source / "metadata.json").is_file():
+            raise RuntimeError("Не найден пакет KWin script: " + str(source))
+
+        data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        target = data_home / "kwin" / "scripts" / "podsvetka-myshi"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True)
+
+        kwriteconfig = shutil.which("kwriteconfig6") or shutil.which("kwriteconfig5")
+        if kwriteconfig:
+            subprocess.run(
+                [kwriteconfig, "--file", "kwinrc", "--group", "Plugins",
+                 "--key", "podsvetka-myshiEnabled", "true" if enabled else "false"],
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+        else:
+            # Minimal KConfig-compatible fallback, preserving unrelated entries.
+            config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "kwinrc"
+            lines = config.read_text(encoding="utf-8").splitlines() if config.exists() else []
+            section_start = next((i for i, line in enumerate(lines)
+                                  if line.strip().lower() == "[plugins]"), None)
+            key_line = "podsvetka-myshiEnabled=" + ("true" if enabled else "false")
+            if section_start is None:
+                lines.extend(["", "[Plugins]", key_line])
+            else:
+                section_end = next((i for i in range(section_start + 1, len(lines))
+                                    if lines[i].strip().startswith("[") and lines[i].strip().endswith("]")),
+                                   len(lines))
+                found = next((i for i in range(section_start + 1, section_end)
+                              if lines[i].split("=", 1)[0].strip() == "podsvetka-myshiEnabled"), None)
+                if found is None:
+                    lines.insert(section_end, key_line)
+                else:
+                    lines[found] = key_line
+            config.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(prefix="kwinrc-", dir=str(config.parent))
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write("\n".join(lines) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_name, config)
+
+        if self.dbus_bus is not None:
+            obj = self.dbus_bus.get_object("org.kde.KWin", "/KWin")
+            self.dbus.Interface(obj, "org.kde.KWin").reconfigure()
+
+    def receive_cursor_position(self, x, y):
+        now = time.monotonic()
+        if self.position != (x, y):
+            self.last_move = now
+        self.position = (x, y)
+        return False
 
     def ipc_loop(self):
         while not self.stop.is_set():
@@ -358,6 +472,11 @@ class App:
         add("Цвет подсветки", glow_color, 4)
         clicks = Gtk.CheckButton.new_with_label("Анимировать щелчки мыши")
         clicks.set_active(cfg["click_effect"])
+        if self.wayland_mode:
+            clicks.set_sensitive(False)
+            clicks.set_tooltip_text(
+                "В KDE Wayland KWin передаёт координаты курсора, но не события кнопок мыши."
+            )
         grid.attach(clicks, 0, 5, 2, 1)
         left = color(cfg["left_color"])
         right = color(cfg["right_color"])
@@ -450,12 +569,18 @@ class App:
         if not self.running:
             return False
         now = time.monotonic()
-        try:
-            pointer = self.root.query_pointer()
-            x, y, mask = int(pointer.root_x), int(pointer.root_y), int(pointer.mask)
-        except Exception as exc:
-            log("Не удалось получить позицию указателя", exc)
-            return True
+        if self.wayland_mode:
+            if self.position is None:
+                return True
+            x, y = self.position
+            mask = 0  # KWin's supported scripting API exposes position, not button state.
+        else:
+            try:
+                pointer = self.root.query_pointer()
+                x, y, mask = int(pointer.root_x), int(pointer.root_y), int(pointer.mask)
+            except Exception as exc:
+                log("Не удалось получить позицию указателя", exc)
+                return True
 
         if self.position != (x, y):
             self.last_move = now
@@ -502,6 +627,19 @@ class App:
             SOCKET.unlink()
         except FileNotFoundError:
             pass
+        if self.wayland_mode and self.dbus_bus is not None:
+            try:
+                self.configure_kwin_script(False)
+            except Exception as exc:
+                log("Не удалось выключить KWin script при выходе", exc)
+            try:
+                if self.kwin_receiver is not None:
+                    self.kwin_receiver.remove_from_connection()
+            except Exception:
+                pass
+            self.kwin_receiver = None
+            self.dbus_name = None
+            self.dbus_bus = None
         try:
             if self.tray:
                 self.tray.set_visible(False)
@@ -560,6 +698,7 @@ def print_diagnostics():
     print("DISPLAY:", os.environ.get("DISPLAY", "(не задан)"))
     print("WAYLAND_DISPLAY:", os.environ.get("WAYLAND_DISPLAY", "(не задан)"))
     print("XDG_SESSION_TYPE:", os.environ.get("XDG_SESSION_TYPE", "(не задан)"))
+    print("KDE Wayland mode:", "да (через XWayland + KWin D-Bus)" if WAYLAND_SESSION else "нет")
     print("Control socket:", str(SOCKET), "(есть)" if SOCKET.exists() else "(пока нет)")
     try:
         result = Gtk.init_check()
@@ -584,7 +723,7 @@ def print_diagnostics():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Подсветка мыши для Linux/X11")
+    parser = argparse.ArgumentParser(description="Подсветка мыши для Linux/X11 и KDE Wayland")
     parser.add_argument("--settings", action="store_true")
     parser.add_argument("--quit", action="store_true")
     parser.add_argument("--toggle", action="store_true")
