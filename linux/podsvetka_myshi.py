@@ -17,6 +17,7 @@ from pathlib import Path
 import cairo
 import gi
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
@@ -140,15 +141,24 @@ def set_autostart(enabled):
     )
 
 
-def send_command(command):
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(0.4)
-            s.connect(str(SOCKET))
-            s.sendall(command.encode("ascii"))
-        return True
-    except OSError:
-        return False
+def send_command(command, retries=1):
+    """
+    Send a command to the active instance. A just-started GTK app may have
+    created its overlay before its IPC thread binds the socket, so allow a
+    short bounded retry window for menu actions and shutdown.
+    """
+    attempts = max(1, min(20, int(retries)))
+    for attempt in range(attempts):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.4)
+                s.connect(str(SOCKET))
+                s.sendall(command.encode("ascii"))
+            return True
+        except OSError:
+            if attempt + 1 < attempts:
+                time.sleep(0.1)
+    return False
 
 
 def acquire_lock():
@@ -548,6 +558,7 @@ def print_diagnostics():
     print("DISPLAY:", os.environ.get("DISPLAY", "(не задан)"))
     print("WAYLAND_DISPLAY:", os.environ.get("WAYLAND_DISPLAY", "(не задан)"))
     print("XDG_SESSION_TYPE:", os.environ.get("XDG_SESSION_TYPE", "(не задан)"))
+    print("Control socket:", str(SOCKET), "(есть)" if SOCKET.exists() else "(пока нет)")
     try:
         result = Gtk.init_check()
         ok = bool(result[0]) if isinstance(result, tuple) else bool(result)
@@ -587,10 +598,10 @@ def main():
         return print_diagnostics()
 
     cmd = "quit" if args.quit else "settings" if args.settings else "toggle" if args.toggle else "show"
-    if send_command(cmd):
+    if send_command(cmd, retries=10 if (args.quit or args.toggle or args.settings) else 1):
         return 0
     if args.quit or args.toggle:
-        print("Подсветка мыши сейчас не запущена.")
+        print("Подсветка мыши сейчас не запущена или управляющий сокет недоступен:", SOCKET)
         return 0
 
     lock_handle = acquire_lock()
