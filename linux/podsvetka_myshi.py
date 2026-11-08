@@ -463,11 +463,6 @@ class App:
                 errors.append(str(exc))
         raise RuntimeError("Не удалось переключить эффект KWin: " + "; ".join(errors))
 
-    @staticmethod
-    def _kwin_color_with_alpha(color, alpha):
-        color = color_ok(color, "#ffffff")
-        return "#{:02x}{}".format(int(alpha * 255 / 100), color[1:])
-
     def configure_kwin_mouseclick(self, enabled, persist=False):
         """
         Configure KWin's built-in Mouse Click Animation. KWin receives real
@@ -479,17 +474,18 @@ class App:
         enabled = bool(enabled)
         previous = bool(self.cfg.get("_kwin_click_effect_enabled", False))
         if enabled:
-            alpha = self.cfg["ring_alpha"]
             self._write_kwin_entries("Plugins", {"mouseclickEnabled": "true"})
+            # Exact group/key names from KWin's mouseclick.kcfg.
+            # Its own effect computes the fade animation per frame.
             self._write_kwin_entries("Effect-mouseclick", {
-                "color1": self._kwin_color_with_alpha(self.cfg["left_color"], alpha),
-                "color2": self._kwin_color_with_alpha("#ffffff", alpha),
-                "color3": self._kwin_color_with_alpha(self.cfg["right_color"], alpha),
-                "lineWidth": self.cfg["ring_width"],
-                "ringLife": self.cfg["ring_duration"],
-                "ringSize": self.cfg["ring_radius"],
-                "ringCount": 2,
-                "showText": "false",
+                "Color1": self.cfg["left_color"],
+                "Color2": "#ffffff",
+                "Color3": self.cfg["right_color"],
+                "LineWidth": self.cfg["ring_width"],
+                "RingLife": self.cfg["ring_duration"],
+                "RingSize": self.cfg["ring_radius"],
+                "RingCount": 2,
+                "ShowText": "false",
             })
             self._kwin_interface().reconfigure()
             time.sleep(0.16)
@@ -645,7 +641,14 @@ class App:
         add("Цвет левого щелчка", left, 6)
         add("Цвет правого щелчка", right, 7)
         add("Размер круга — радиус (пикс.)", ring_size, 8)
-        add("Непрозрачность круга (%)", ring_alpha, 9)
+        if not self.wayland_mode:
+            add("Непрозрачность круга (%)", ring_alpha, 9)
+        else:
+            ring_alpha.set_sensitive(False)
+            ring_alpha.set_tooltip_text(
+                "В KDE Wayland эффект KWin сам анимирует затухание кольца; "
+                "ручная прозрачность для этого системного эффекта не предоставляется."
+            )
         add("Длительность (мс)", duration, 10)
         add("Толщина линии", width, 11)
         autostart = Gtk.CheckButton.new_with_label("Запускать при входе в систему")
@@ -916,8 +919,8 @@ def main():
 
     # Send the long-supported "settings" command to existing pre-1.0.7
     # background copies as well; older instances don't understand "show".
-    cmd = "quit" if args.quit else "settings" if args.settings or not args.autostart else "toggle" if args.toggle else "activate"
-    if send_command(cmd, retries=10 if (args.quit or args.toggle or args.settings) else 1):
+    cmd = "quit" if args.quit else "toggle" if args.toggle else "settings" if args.settings or not args.autostart else "activate"
+    if send_command(cmd, retries=10 if cmd in ("quit", "toggle", "settings") else 1):
         return 0
     if args.quit or args.toggle:
         print("Подсветка мыши сейчас не запущена или управляющий сокет недоступен:", SOCKET)
