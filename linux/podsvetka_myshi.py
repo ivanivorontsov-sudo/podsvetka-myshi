@@ -685,6 +685,8 @@ def self_test():
     assert 0 < ease_out(0.5) < 1
     assert clamp("120", 20, 400, 150) == 120
     assert clamp("bad", 20, 400, 150) == 150
+    assert clamp("42", 5, 100, 95) == 42
+    assert clamp("500", 5, 100, 95) == 100
     assert color_ok("#a1B2c3", "#ffffff") == "#a1b2c3"
     assert color_ok("bad", "#ffffff") == "#ffffff"
     print("Linux core self-tests: OK")
