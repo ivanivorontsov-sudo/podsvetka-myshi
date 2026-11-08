@@ -17,16 +17,18 @@
 
 ## Поддерживаемая среда
 
-Первая реализация рассчитана на **X11/Xorg** с включённой композицией окон: Debian 13, Ubuntu и производные (XFCE, Cinnamon, KDE Plasma X11, GNOME Xorg).
+- **X11/Xorg:** поддерживаются прозрачная подсветка, пропуск щелчков и анимация левого/правого нажатия.
+- **KDE Plasma Wayland (KWin):** поддерживается через официальный KWin scripting API для координат курсора и прозрачное окно XWayland для отрисовки. Нужны XWayland и `python3-dbus`. Первый запуск включает пользовательский KWin script; при штатном выходе он выключается. Анимация щелчков на Wayland отключена, поскольку используемый KWin scripting API передаёт координаты, но не состояние кнопок мыши.
+- **Другие Wayland-композиторы** пока не поддерживаются.
 
-**Wayland пока не поддерживается.** В Wayland глобальное отслеживание указателя и прозрачные окна, пропускающие ввод поверх других приложений, контролируются композитором. Программа сообщает об ограничении вместо имитации неработающей подсветки. Нужен сеанс Xorg.
+В режиме KDE Wayland окно отрисовки использует XWayland, а глобальные координаты берёт у KWin. XWayland не используется для перехвата ввода.
 
 ## Установка из репозитория
 
 На Debian/Ubuntu выполни:
 
     sudo apt update
-    sudo apt install -y python3 python3-gi gir1.2-gtk-3.0 python3-cairo python3-gi-cairo python3-xlib
+    sudo apt install -y python3 python3-gi gir1.2-gtk-3.0 python3-cairo python3-gi-cairo python3-xlib python3-dbus xwayland
     git clone https://github.com/ivanivorontsov-sudo/podsvetka-myshi.git
     cd podsvetka-myshi
     bash linux/install.sh
@@ -57,7 +59,7 @@ GitHub Actions собирает пакет podsvetka-myshi_*_all.deb. Скача
 
     bash linux/uninstall.sh
 
-Настройки и журнал сохраняются. Их можно удалить вручную, если они больше не нужны.
+Настройки и журнал сохраняются. Их можно удалить вручную, если они больше не нужны. Удаление отключает пользовательский KWin script.
 
 ## Лицензия
 
