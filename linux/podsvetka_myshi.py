@@ -31,7 +31,7 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 110, "glow_alpha": 35, "click_effect": True,
@@ -658,10 +658,14 @@ class App:
         add("Непрозрачность свечения (%)", glow_alpha, 3)
         add("Цвет подсветки", glow_color, 4)
         clicks = Gtk.CheckButton.new_with_label("Анимировать щелчки мыши")
+        # Explicitly keep this control interactive. Some KDE/GTK themes render
+        # check buttons as insensitive when inherited state is stale.
+        clicks.set_sensitive(True)
         clicks.set_active(cfg["click_effect"])
         if self.wayland_mode:
             clicks.set_tooltip_text(
-                "В KDE Wayland анимацию нажатий рисует встроенный эффект KWin."
+                "Включает или выключает встроенную анимацию щелчков KWin. "
+                "Изменение применяется после нажатия «Сохранить»."
             )
         grid.attach(clicks, 0, 5, 2, 1)
         left = color(cfg["left_color"])
