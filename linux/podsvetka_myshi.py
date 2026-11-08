@@ -30,12 +30,12 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 150, "glow_alpha": 35, "click_effect": True,
     "left_color": "#ff5252", "right_color": "#448aff",
-    "ring_radius": 100, "ring_duration": 550, "ring_width": 3,
+    "ring_radius": 100, "ring_alpha": 95, "ring_duration": 550, "ring_width": 3,
 }
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or (Path.home() / ".cache" / APP))
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP
@@ -95,8 +95,8 @@ def load_settings():
     for key in ("glow_color", "left_color", "right_color"):
         data[key] = color_ok(data.get(key), DEFAULTS[key])
     for key, lo, hi in (("glow_size", 20, 400), ("glow_alpha", 5, 100),
-                        ("ring_radius", 10, 300), ("ring_duration", 150, 3000),
-                        ("ring_width", 1, 12)):
+                        ("ring_radius", 10, 300), ("ring_alpha", 5, 100),
+                        ("ring_duration", 150, 3000), ("ring_width", 1, 12)):
         data[key] = clamp(data.get(key), lo, hi, DEFAULTS[key])
     data["autostart"] = bool(data.get("autostart", False))
     return data
@@ -423,7 +423,9 @@ class App:
                 conn.close()
 
     def handle(self, cmd):
-        if cmd == "settings":
+        if cmd in ("settings", "show"):
+            # Launching the menu entry a second time should reveal settings,
+            # not silently do nothing while the background glow keeps running.
             self.settings_dialog()
         elif cmd == "quit":
             self.shutdown()
@@ -472,7 +474,7 @@ class App:
         glow_alpha = scale(5, 100, cfg["glow_alpha"])
         glow_color = color(cfg["glow_color"])
         add("Размер свечения (пикс.)", glow_size, 2)
-        add("Яркость (%)", glow_alpha, 3)
+        add("Непрозрачность свечения (%)", glow_alpha, 3)
         add("Цвет подсветки", glow_color, 4)
         clicks = Gtk.CheckButton.new_with_label("Анимировать щелчки мыши")
         clicks.set_active(cfg["click_effect"])
@@ -485,16 +487,18 @@ class App:
         left = color(cfg["left_color"])
         right = color(cfg["right_color"])
         ring_size = scale(10, 300, cfg["ring_radius"])
+        ring_alpha = scale(5, 100, cfg["ring_alpha"])
         duration = scale(150, 3000, cfg["ring_duration"])
         width = scale(1, 12, cfg["ring_width"])
         add("Цвет левого щелчка", left, 6)
         add("Цвет правого щелчка", right, 7)
-        add("Радиус круга", ring_size, 8)
-        add("Длительность (мс)", duration, 9)
-        add("Толщина линии", width, 10)
+        add("Размер круга — радиус (пикс.)", ring_size, 8)
+        add("Непрозрачность круга (%)", ring_alpha, 9)
+        add("Длительность (мс)", duration, 10)
+        add("Толщина линии", width, 11)
         autostart = Gtk.CheckButton.new_with_label("Запускать при входе в систему")
         autostart.set_active(cfg["autostart"])
-        grid.attach(autostart, 0, 11, 2, 1)
+        grid.attach(autostart, 0, 12, 2, 1)
         dlg.show_all()
 
         if dlg.run() == Gtk.ResponseType.OK:
@@ -508,6 +512,7 @@ class App:
                 "left_color": self.to_hex(left.get_rgba()),
                 "right_color": self.to_hex(right.get_rgba()),
                 "ring_radius": int(ring_size.get_value()),
+                "ring_alpha": int(ring_alpha.get_value()),
                 "ring_duration": int(duration.get_value()),
                 "ring_width": int(width.get_value()),
                 "autostart": autostart.get_active(),
@@ -556,7 +561,7 @@ class App:
             t = max(0.0, min(1.0, (now - ring["start"]) / (ring["duration"] / 1000.0)))
             radius = ring["radius"] * (0.12 + ease_out(t) * 0.88)
             r, g, b = rgb(ring["color"])
-            ctx.set_source_rgba(r, g, b, (1.0 - t) * 0.95)
+            ctx.set_source_rgba(r, g, b, (1.0 - t) * ring.get("alpha", 95) / 100.0)
             ctx.set_line_width(ring["width"])
             ctx.arc(ring["x"], ring["y"], radius, 0, math.pi * 2)
             ctx.stroke()
@@ -566,7 +571,7 @@ class App:
         self.rings.append({
             "x": x, "y": y, "color": color, "start": now,
             "duration": self.cfg["ring_duration"], "radius": self.cfg["ring_radius"],
-            "width": self.cfg["ring_width"], "drawn": 0,
+            "alpha": self.cfg["ring_alpha"], "width": self.cfg["ring_width"], "drawn": 0,
         })
 
     def tick(self):
