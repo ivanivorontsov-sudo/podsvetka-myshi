@@ -521,11 +521,51 @@ def self_test():
     print("Linux core self-tests: OK")
 
 
+def gtk_init_checked():
+    """
+    GTK 3 bindings may return either bool or (bool, argv).
+    Never treat a non-empty tuple as success: (False, []) is still truthy.
+    """
+    result = Gtk.init_check()
+    if isinstance(result, tuple):
+        return bool(result[0])
+    return bool(result)
+
+
+def print_diagnostics():
+    print("Подсветка мыши — диагностика Linux")
+    print("Python:", sys.version.split()[0])
+    print("DISPLAY:", os.environ.get("DISPLAY", "(не задан)"))
+    print("WAYLAND_DISPLAY:", os.environ.get("WAYLAND_DISPLAY", "(не задан)"))
+    print("XDG_SESSION_TYPE:", os.environ.get("XDG_SESSION_TYPE", "(не задан)"))
+    try:
+        result = Gtk.init_check()
+        ok = bool(result[0]) if isinstance(result, tuple) else bool(result)
+        print("GTK init:", "OK" if ok else "ОШИБКА")
+        display = Gdk.Display.get_default() if ok else None
+        print("GDK display:", display.get_name() if display else "(нет)")
+        if display:
+            screen = Gdk.Screen.get_default()
+            visual = screen.get_rgba_visual() if screen else None
+            print("RGBA visual:", "OK" if visual else "НЕТ — нужен композитор окон")
+        if ok and display and "wayland" not in display.get_name().lower():
+            probe = xdisplay.Display()
+            pointer = probe.screen().root.query_pointer()
+            print("X11 pointer:", int(pointer.root_x), int(pointer.root_y))
+            print("X11 shape extension:", "OK" if probe.has_extension("SHAPE") else "НЕТ")
+            probe.close()
+    except Exception as exc:
+        print("Диагностика GTK/X11 завершилась ошибкой:", repr(exc))
+        return 1
+    return 0 if ok else 2
+
+
 def main():
     parser = argparse.ArgumentParser(description="Подсветка мыши для Linux/X11")
     parser.add_argument("--settings", action="store_true")
     parser.add_argument("--quit", action="store_true")
     parser.add_argument("--toggle", action="store_true")
+    parser.add_argument("--diagnose", action="store_true", help="проверить окружение GTK/X11")
     parser.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="version", version=VERSION)
@@ -533,6 +573,8 @@ def main():
     if args.self_test:
         self_test()
         return 0
+    if args.diagnose:
+        return print_diagnostics()
 
     cmd = "quit" if args.quit else "settings" if args.settings else "toggle" if args.toggle else "show"
     if send_command(cmd):
@@ -547,9 +589,15 @@ def main():
             return 0
         print("Подсветка мыши уже запускается. Повторите команду.", file=sys.stderr)
         return 1
+
+    gtk_ready = False
     try:
-        if not Gtk.init_check():
-            raise RuntimeError("Не удалось подключиться к графическому сеансу GTK.")
+        gtk_ready = gtk_init_checked()
+        if not gtk_ready:
+            raise RuntimeError(
+                "GTK не смог подключиться к графическому сеансу. "
+                "Проверьте DISPLAY, WAYLAND_DISPLAY и запуск из меню рабочего стола."
+            )
         app = App(open_settings=args.settings)
         app.lock_handle = lock_handle
         Gtk.main()
@@ -559,8 +607,8 @@ def main():
             "\n\nПодробности журнала: " + str(STATE / "app.log")
         )
         print(message, file=sys.stderr)
-        try:
-            if Gtk.init_check():
+        if gtk_ready:
+            try:
                 dialog = Gtk.MessageDialog(
                     transient_for=None, flags=Gtk.DialogFlags.MODAL,
                     message_type=Gtk.MessageType.ERROR,
@@ -569,8 +617,8 @@ def main():
                 dialog.format_secondary_text(message)
                 dialog.run()
                 dialog.destroy()
-        except Exception as dialog_exc:
-            log("Не удалось показать окно ошибки", dialog_exc)
+            except Exception as dialog_exc:
+                log("Не удалось показать окно ошибки", dialog_exc)
         return 1
     finally:
         lock_handle.close()
