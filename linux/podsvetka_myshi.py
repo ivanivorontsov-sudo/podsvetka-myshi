@@ -602,7 +602,7 @@ def main():
         return 0
     if args.quit or args.toggle:
         print("Подсветка мыши сейчас не запущена или управляющий сокет недоступен:", SOCKET)
-        return 0
+        return 2
 
     lock_handle = acquire_lock()
     if lock_handle is None:
