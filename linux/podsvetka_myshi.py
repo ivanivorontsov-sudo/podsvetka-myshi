@@ -736,11 +736,13 @@ class App:
         if not self.wayland_mode:
             add("Непрозрачность круга (%)", ring_alpha, 9)
         else:
-            ring_alpha.set_sensitive(False)
-            ring_alpha.set_tooltip_text(
-                "В KDE Wayland эффект KWin сам анимирует затухание кольца; "
-                "ручная прозрачность для этого системного эффекта не предоставляется."
+            opacity_info = Gtk.Label(label="Автоматическое затухание KWin")
+            opacity_info.set_xalign(0)
+            opacity_info.set_tooltip_text(
+                "Встроенный эффект KWin сам рассчитывает прозрачность каждого кадра. "
+                "Он не предоставляет ручную настройку прозрачности."
             )
+            add("Прозрачность круга", opacity_info, 9)
         add("Длительность (мс)", duration, 10)
         add("Толщина линии", width, 11)
         autostart = Gtk.CheckButton.new_with_label("Запускать при входе в систему")
