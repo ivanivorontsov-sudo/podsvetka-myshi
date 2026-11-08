@@ -33,16 +33,18 @@ jobs:
         run: |
           /usr/bin/python3 -m py_compile linux/podsvetka_myshi.py
           /usr/bin/python3 linux/podsvetka_myshi.py --self-test
+          sh -n linux/launcher.sh
           bash -n linux/install.sh
           bash -n linux/uninstall.sh
 
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.0.1"
+          VERSION="1.0.2"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
+          install -m 755 linux/launcher.sh "$PKG/usr/bin/podsvetka-myshi-launch"
           cat > "$PKG/usr/bin/podsvetka-myshi" <<'EOF'
           #!/bin/sh
           exec /usr/bin/python3 /usr/lib/podsvetka-myshi/podsvetka_myshi.py "$@"
@@ -53,7 +55,7 @@ jobs:
           Type=Application
           Name=Подсветка мыши
           Comment=Подсветка курсора и круги при щелчке
-          Exec=/usr/bin/podsvetka-myshi
+          Exec=/usr/bin/podsvetka-myshi-launch
           Icon=input-mouse
           Terminal=false
           Categories=Utility;Accessibility;
