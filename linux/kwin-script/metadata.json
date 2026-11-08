@@ -1,0 +1,18 @@
+{
+  "KPackageStructure": "KWin/Script",
+  "KPlugin": {
+    "Authors": [
+      {
+        "Name": "Ivan Vorontsov"
+      }
+    ],
+    "Description": "Передаёт координаты курсора KWin приложению «Подсветка мыши» в сеансе Wayland",
+    "Icon": "input-mouse",
+    "Id": "podsvetka-myshi",
+    "License": "MIT",
+    "Name": "Подсветка мыши — KDE Wayland",
+    "Version": "1.0.5"
+  },
+  "X-Plasma-API": "javascript",
+  "X-Plasma-MainScript": "code/main.js"
+}
