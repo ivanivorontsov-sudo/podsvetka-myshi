@@ -555,7 +555,22 @@ def main():
         Gtk.main()
     except Exception as exc:
         log("Ошибка запуска Linux-версии", exc)
-        print("Не удалось запустить «Подсветку мыши»: " + str(exc), file=sys.stderr)
+        message = "Не удалось запустить «Подсветку мыши»:\n\n" + str(exc) + (
+            "\n\nПодробности журнала: " + str(STATE / "app.log")
+        )
+        print(message, file=sys.stderr)
+        try:
+            if Gtk.init_check():
+                dialog = Gtk.MessageDialog(
+                    transient_for=None, flags=Gtk.DialogFlags.MODAL,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK, text="Подсветка мыши",
+                )
+                dialog.format_secondary_text(message)
+                dialog.run()
+                dialog.destroy()
+        except Exception as dialog_exc:
+            log("Не удалось показать окно ошибки", dialog_exc)
         return 1
     finally:
         lock_handle.close()
