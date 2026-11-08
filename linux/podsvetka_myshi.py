@@ -31,12 +31,12 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.0.9"
+VERSION = "1.1.0"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 110, "glow_alpha": 35, "click_effect": True,
     "left_color": "#ff5252", "right_color": "#448aff",
-    "ring_radius": 30, "ring_alpha": 85, "ring_duration": 420, "ring_width": 2,
+    "ring_radius": 18, "ring_alpha": 85, "ring_duration": 420, "ring_width": 2,
 }
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or (Path.home() / ".cache" / APP))
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP
@@ -77,6 +77,14 @@ def rgb(value):
     return tuple(int(value[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
 
 
+def parse_kwin_mouseclick_state(report):
+    """Return KWin MouseClickEffect's runtime enabled property, if present."""
+    match = re.search(r"(?im)^\\s*enabled\\s*:\\s*(true|false)\\s*$", str(report))
+    if not match:
+        return None
+    return match.group(1).lower() == "true"
+
+
 def load_settings():
     data = dict(DEFAULTS)
     path = CONFIG / "settings.json"
@@ -99,7 +107,10 @@ def load_settings():
             data["ring_radius"] = 30
         if loaded.get("glow_size") == 150:
             data["glow_size"] = 110
-    data["schema_version"] = 2
+    if schema < 3 and loaded.get("ring_radius") == 30:
+        # 1.1.0 makes the default click ring less oversized on high-DPI screens.
+        data["ring_radius"] = 18
+    data["schema_version"] = 3
     current_session = os.environ.get("XDG_SESSION_ID") or os.environ.get("WAYLAND_DISPLAY", "")
     if data.get("_kwin_click_session", "") != current_session:
         data["_kwin_click_effect_enabled"] = False
@@ -427,27 +438,41 @@ class App:
         obj = self.dbus_bus.get_object("org.kde.KWin", "/KWin")
         return self.dbus.Interface(obj, "org.kde.KWin")
 
-    def _kwin_mouseclick_state(self):
-        """Read MouseClickEffect enabled state from KWin support information."""
-        try:
-            report = str(self._kwin_interface().supportInformation())
-        except Exception as exc:
-            log("Не удалось прочитать состояние эффекта Mouse Click Animation", exc)
-            return None
+    def _kwin_effects_interface(self):
+        obj = self.dbus_bus.get_object("org.kde.KWin", "/Effects")
+        return self.dbus.Interface(obj, "org.kde.kwin.Effects")
 
-        # KWin versions format the Effects section slightly differently.
-        lines = report.splitlines()
-        in_mouseclick = False
-        for line in lines:
-            if re.match(r"^\s*mouseclick\s*:?\s*$", line, re.IGNORECASE):
-                in_mouseclick = True
-                continue
-            if in_mouseclick:
-                if re.match(r"^\s*enabled\s*:\s*(true|false)\s*$", line, re.IGNORECASE):
-                    return re.search(r"(true|false)", line, re.IGNORECASE).group(1).lower() == "true"
-                if line.strip() and not line[:1].isspace() and line.strip().endswith(":"):
-                    in_mouseclick = False
-        return None
+    def _ensure_kwin_mouseclick_loaded(self):
+        """Load the plugin explicitly; loading and enabling are separate KWin operations."""
+        effects = self._kwin_effects_interface()
+        if not bool(effects.isEffectSupported("mouseclick")):
+            raise RuntimeError("Эффект Mouse Click Animation не поддерживается этой сборкой KWin.")
+        if bool(effects.isEffectLoaded("mouseclick")):
+            return
+
+        # loadEffect() loads the plugin. Do not use toggleEffect(): that API
+        # toggles the plugin's loaded state and can unload it.
+        effects.loadEffect("mouseclick")
+        for _ in range(40):
+            if bool(effects.isEffectLoaded("mouseclick")):
+                log("Плагин KWin mouseclick успешно загружен")
+                return
+            time.sleep(0.05)
+        raise RuntimeError("KWin не загрузил эффект mouseclick за 2 секунды.")
+
+    def _kwin_mouseclick_state(self):
+        """Read the runtime 'enabled' Q_PROPERTY from the loaded KWin effect."""
+        try:
+            effects = self._kwin_effects_interface()
+            if not bool(effects.isEffectLoaded("mouseclick")):
+                return None
+            # This effect-specific D-Bus API is machine-readable; the global
+            # /KWin support report is intended for diagnostics, not state sync.
+            report = str(effects.supportInformation("mouseclick"))
+            return parse_kwin_mouseclick_state(report)
+        except Exception as exc:
+            log("Не удалось прочитать состояние эффекта Mouse Click Animation через /Effects", exc)
+            return None
 
     def _invoke_kwin_mouseclick_toggle(self):
         """Invoke the version-specific KWin action object name.
@@ -505,10 +530,12 @@ class App:
 
         enabled = bool(enabled)
         previous = bool(self.cfg.get("_kwin_click_effect_enabled", False))
+        effects = self._kwin_effects_interface()
+
         if enabled:
+            # Write settings before loading the effect: the plugin reads them
+            # when it is created. Reconfigure an already-loaded plugin too.
             self._write_kwin_entries("Plugins", {"mouseclickEnabled": "true"})
-            # Exact group/key names from KWin's mouseclick.kcfg.
-            # Its own effect computes the fade animation per frame.
             self._write_kwin_entries("Effect-mouseclick", {
                 "Color1": self.cfg["left_color"],
                 "Color2": "#ffffff",
@@ -520,16 +547,45 @@ class App:
                 "ShowText": "false",
             })
             self._kwin_interface().reconfigure()
-            time.sleep(0.16)
+            self._ensure_kwin_mouseclick_loaded()
+            effects.reconfigureEffect("mouseclick")
+            time.sleep(0.12)
+        elif not bool(effects.isEffectLoaded("mouseclick")):
+            # An unloaded effect cannot be drawing rings. Don't invoke an
+            # unavailable shortcut just to turn off an already-off plugin.
+            self.cfg["_kwin_click_effect_enabled"] = False
+            self.cfg["_kwin_click_session"] = (
+                os.environ.get("XDG_SESSION_ID") or os.environ.get("WAYLAND_DISPLAY", "")
+            )
+            if persist:
+                save_settings(self.cfg)
+            log("Анимация щелчков KWin уже выключена (плагин не загружен)")
+            return
 
         actual = self._kwin_mouseclick_state()
         if actual is not None:
             previous = actual
+
         if previous != enabled:
             self._invoke_kwin_mouseclick_toggle()
-            actual = self._kwin_mouseclick_state()
-            if actual is not None and actual != enabled:
-                raise RuntimeError("KWin не подтвердил включение/выключение анимации щелчков.")
+            # The shortcut updates MouseClickEffect::enabled asynchronously
+            # through KGlobalAccel. Confirm before persisting the new state.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                actual = self._kwin_mouseclick_state()
+                if actual is not None and actual == enabled:
+                    break
+                time.sleep(0.05)
+            if actual is None or actual != enabled:
+                raise RuntimeError(
+                    "KWin не подтвердил состояние анимации щелчков "
+                    "через Effects.supportInformation('mouseclick')."
+                )
+        elif actual is None:
+            raise RuntimeError(
+                "KWin загрузил mouseclick, но не сообщил его состояние. "
+                "Настройка не отмечена как применённая."
+            )
 
         self.cfg["_kwin_click_effect_enabled"] = enabled
         self.cfg["_kwin_click_session"] = (
@@ -885,6 +941,9 @@ def set_autostart(enabled):
 
 
 def self_test():
+    assert parse_kwin_mouseclick_state("mouseclick:\\nenabled: true\\n") is True
+    assert parse_kwin_mouseclick_state("mouseclick:\\nenabled: false\\n") is False
+    assert parse_kwin_mouseclick_state("mouseclick:\\nringSize: 18\\n") is None
     assert ease_out(0) == 0 and ease_out(1) == 1
     assert 0 < ease_out(0.5) < 1
     assert clamp("120", 20, 400, 150) == 120
