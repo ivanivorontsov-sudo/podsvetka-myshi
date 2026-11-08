@@ -21,6 +21,7 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -39,12 +40,22 @@ jobs:
 
       - name: GUI smoke test under Xvfb and X11 compositor
         run: |
-          xvfb-run -a -s "-screen 0 1280x800x24 +extension Composite +extension RENDER" bash -euo pipefail -c '
+          timeout 40s xvfb-run -a -s "-screen 0 1280x800x24 +extension Composite +extension RENDER" bash -euo pipefail -c '
+            set -x
             xcompmgr -n >/tmp/podsvetka-xcompmgr.log 2>&1 &
             COMP_PID=$!
-            trap "kill $COMP_PID 2>/dev/null || true" EXIT
+            APP_PID=""
+            cleanup() {
+              if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
+                /usr/bin/python3 linux/podsvetka_myshi.py --quit || kill "$APP_PID" || true
+              fi
+              kill "$COMP_PID" 2>/dev/null || true
+            }
+            trap cleanup EXIT
             sleep 1
+            echo "DIAGNOSTIC"
             /usr/bin/python3 linux/podsvetka_myshi.py --diagnose
+            echo "START APP"
             /usr/bin/python3 linux/podsvetka_myshi.py &
             APP_PID=$!
             FOUND=0
@@ -61,9 +72,13 @@ jobs:
               fi
               sleep 0.2
             done
+            echo "OVERLAY FOUND=$FOUND"
             test "$FOUND" -eq 1
+            echo "STOP APP"
             /usr/bin/python3 linux/podsvetka_myshi.py --quit
+            timeout 5s tail --pid="$APP_PID" -f /dev/null
             wait "$APP_PID"
+            APP_PID=""
           '
 
       - name: Сборка Debian-пакета
