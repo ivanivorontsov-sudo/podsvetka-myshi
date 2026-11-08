@@ -119,12 +119,22 @@ def set_autostart(enabled):
             pass
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    py = (sys.executable or "/usr/bin/python3").replace("\\", "\\\\").replace('"', '\\"')
-    script = str(Path(__file__).resolve()).replace("\\", "\\\\").replace('"', '\\"')
+    candidates = [
+        Path("/usr/bin/podsvetka-myshi-launch"),
+        Path.home() / ".local" / "bin" / "podsvetka-myshi-launch",
+    ]
+    launcher = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if launcher:
+        executable = str(launcher).replace("\\", "\\\\").replace('"', '\\"')
+        command = '"' + executable + '" --autostart'
+    else:
+        py = (sys.executable or "/usr/bin/python3").replace("\\", "\\\\").replace('"', '\\"')
+        script = str(Path(__file__).resolve()).replace("\\", "\\\\").replace('"', '\\"')
+        command = '"' + py + '" "' + script + '" --autostart'
     target.write_text(
         "[Desktop Entry]\nType=Application\nName=Подсветка мыши\n"
         "Comment=Подсветка курсора и анимация щелчков\n"
-        'Exec="' + py + '" "' + script + '" --autostart\n'
+        "Exec=" + command + "\n"
         "Icon=input-mouse\nTerminal=false\nNoDisplay=true\n",
         encoding="utf-8",
     )
