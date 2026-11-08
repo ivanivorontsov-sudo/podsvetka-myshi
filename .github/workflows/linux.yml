@@ -37,6 +37,8 @@ jobs:
           /usr/bin/python3 -m json.tool linux/kwin-script/metadata.json >/dev/null
           grep -q 'workspace.cursorPosChanged' linux/kwin-script/contents/code/main.js
           grep -q 'SetCursorPosition' linux/kwin-script/contents/code/main.js
+          grep -q 'ring_alpha' linux/podsvetka_myshi.py
+          grep -q 'cmd in ("settings", "show")' linux/podsvetka_myshi.py
           sh -n linux/launcher.sh
           bash -n linux/install.sh
           bash -n linux/uninstall.sh
@@ -87,7 +89,7 @@ jobs:
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.0.5"
+          VERSION="1.0.6"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi" "$PKG/usr/share/kwin/scripts/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
