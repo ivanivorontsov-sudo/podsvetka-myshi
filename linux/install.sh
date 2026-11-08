@@ -20,6 +20,7 @@ APPS="${HOME}/.local/share/applications"
 
 mkdir -p "${DEST}" "${BIN}" "${APPS}"
 install -m 755 "${ROOT}/linux/podsvetka_myshi.py" "${DEST}/podsvetka_myshi.py"
+install -m 755 "${ROOT}/linux/launcher.sh" "${BIN}/podsvetka-myshi-launch"
 
 cat > "${BIN}/podsvetka-myshi" <<EOF
 #!/bin/sh
@@ -32,7 +33,7 @@ cat > "${APPS}/podsvetka-myshi.desktop" <<EOF
 Type=Application
 Name=Подсветка мыши
 Comment=Подсветка курсора и круги при щелчке
-Exec=${BIN}/podsvetka-myshi
+Exec=${BIN}/podsvetka-myshi-launch
 Icon=input-mouse
 Terminal=false
 Categories=Utility;Accessibility;
