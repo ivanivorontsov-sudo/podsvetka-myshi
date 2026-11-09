@@ -8,3 +8,9 @@
 * Без установки и без прав администратора, без Планировщика заданий (нет «ошибки оператора»).
 
 Скачайте `PodsvetkaMyshi.exe`, положите в постоянную папку (например, `C:\Users\<имя>\Программы\`) и запустите. Если появится «Система Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае».
+
+
+## 1.1.4 — 2026-11-09
+- Added a direct “Анимация щелчков” submenu to the tray icon context menu.
+- The three presets (single ring, double ripple, layered ripple) are selectable as radio items and apply immediately.
+- The settings dialog retains the same selector.
