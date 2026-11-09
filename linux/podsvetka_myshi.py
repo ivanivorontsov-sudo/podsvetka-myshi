@@ -31,12 +31,18 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.1.2"
+VERSION = "1.1.3"
+ANIMATION_STYLES = {
+    "single": ("Одиночный импульс — без паутины", 1),
+    "ripple": ("Двойная рябь", 2),
+    "waves": ("Многослойная рябь", 4),
+}
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 110, "glow_alpha": 35, "click_effect": True,
     "left_color": "#ff5252", "right_color": "#448aff",
     "ring_radius": 18, "ring_alpha": 85, "ring_duration": 420, "ring_width": 2,
+    "animation_style": "single",
 }
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or (Path.home() / ".cache" / APP))
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP
@@ -113,7 +119,9 @@ def load_settings():
     if schema < 3 and loaded.get("ring_radius") == 30:
         # 1.1.0 makes the default click ring less oversized on high-DPI screens.
         data["ring_radius"] = 18
-    data["schema_version"] = 3
+    data["schema_version"] = 4
+    if data.get("animation_style") not in ANIMATION_STYLES:
+        data["animation_style"] = "single"
     current_session = os.environ.get("XDG_SESSION_ID") or os.environ.get("WAYLAND_DISPLAY", "")
     if data.get("_kwin_click_session", "") != current_session:
         data["_kwin_click_effect_enabled"] = False
@@ -551,7 +559,7 @@ class App:
                 "LineWidth": self.cfg["ring_width"],
                 "RingLife": self.cfg["ring_duration"],
                 "RingSize": self.cfg["ring_radius"],
-                "RingCount": 2,
+                "RingCount": ANIMATION_STYLES[self.cfg.get("animation_style", "single")][1],
                 "ShowText": "false",
             })
             self._kwin_interface().reconfigure()
@@ -749,11 +757,25 @@ class App:
         ring_alpha = scale(5, 100, cfg["ring_alpha"])
         duration = scale(150, 3000, cfg["ring_duration"])
         width = scale(1, 12, cfg["ring_width"])
-        add("Цвет левого щелчка", left, 6)
-        add("Цвет правого щелчка", right, 7)
-        add("Размер круга — радиус (пикс.)", ring_size, 8)
+        animation_style = Gtk.ComboBoxText.new()
+        for style_id, (style_label, _ring_count) in ANIMATION_STYLES.items():
+            animation_style.append(style_id, style_label)
+        animation_style.set_active_id(cfg.get("animation_style", "single"))
+        animation_style.set_sensitive(clicks.get_active())
+        animation_style.set_tooltip_text(
+            "Одиночный импульс рисует одно кольцо. Двойная и многослойная рябь "
+            "добавляют следующие волны с небольшой задержкой."
+        )
+        clicks.connect(
+            "toggled",
+            lambda widget: animation_style.set_sensitive(widget.get_active())
+        )
+        add("Стиль анимации щелчка", animation_style, 6)
+        add("Цвет левого щелчка", left, 7)
+        add("Цвет правого щелчка", right, 8)
+        add("Размер круга — радиус (пикс.)", ring_size, 9)
         if not self.wayland_mode:
-            add("Непрозрачность круга (%)", ring_alpha, 9)
+            add("Непрозрачность круга (%)", ring_alpha, 10)
         else:
             opacity_info = Gtk.Label(label="Автоматическое затухание KWin")
             opacity_info.set_xalign(0)
@@ -761,12 +783,12 @@ class App:
                 "Встроенный эффект KWin сам рассчитывает прозрачность каждого кадра. "
                 "Он не предоставляет ручную настройку прозрачности."
             )
-            add("Прозрачность круга", opacity_info, 9)
-        add("Длительность (мс)", duration, 10)
-        add("Толщина линии", width, 11)
+            add("Прозрачность круга", opacity_info, 10)
+        add("Длительность (мс)", duration, 11)
+        add("Толщина линии", width, 12)
         autostart = Gtk.CheckButton.new_with_label("Запускать при входе в систему")
         autostart.set_active(cfg["autostart"])
-        grid.attach(autostart, 0, 12, 2, 1)
+        grid.attach(autostart, 0, 13, 2, 1)
         dlg.show_all()
 
         if dlg.run() == Gtk.ResponseType.OK:
@@ -774,6 +796,7 @@ class App:
                 "enabled": enabled.get_active(),
                 "only_moving": moving.get_active(),
                 "click_effect": clicks.get_active(),
+                "animation_style": animation_style.get_active_id() or "single",
                 "glow_size": int(glow_size.get_value()),
                 "glow_alpha": int(glow_alpha.get_value()),
                 "glow_color": self.to_hex(glow_color.get_rgba()),
@@ -835,20 +858,34 @@ class App:
                       self.cfg["glow_size"], self.cfg["glow_color"], self.cfg["glow_alpha"])
         now = time.monotonic()
         for ring in self.rings:
-            t = max(0.0, min(1.0, (now - ring["start"]) / (ring["duration"] / 1000.0)))
-            radius = ring["radius"] * (0.12 + ease_out(t) * 0.88)
+            elapsed_ms = max(0.0, (now - ring["start"]) * 1000.0)
+            duration_ms = max(1.0, float(ring["duration"]))
+            count = max(1, int(ring.get("count", 1)))
             r, g, b = rgb(ring["color"])
-            ctx.set_source_rgba(r, g, b, (1.0 - t) * ring.get("alpha", 95) / 100.0)
-            ctx.set_line_width(ring["width"])
-            ctx.arc(ring["x"], ring["y"], radius, 0, math.pi * 2)
-            ctx.stroke()
+            furthest_radius = ring.get("drawn", 0)
+            for index in range(count):
+                # Stagger each wave, like KWin's native Mouse Click Animation.
+                delay_ms = duration_ms * index / (count * 3.0)
+                t = (elapsed_ms - delay_ms) / duration_ms
+                if t < 0.0 or t > 1.0:
+                    continue
+                radius = ring["radius"] * (0.12 + ease_out(t) * 0.88)
+                alpha = (1.0 - t) * ring.get("alpha", 95) / 100.0
+                ctx.set_source_rgba(r, g, b, alpha)
+                ctx.set_line_width(ring["width"])
+                ctx.arc(ring["x"], ring["y"], radius, 0, math.pi * 2)
+                ctx.stroke()
+                furthest_radius = max(furthest_radius, radius)
+            ring["drawn"] = furthest_radius
         return False
 
     def add_ring(self, x, y, color, now):
         self.rings.append({
             "x": x, "y": y, "color": color, "start": now,
             "duration": self.cfg["ring_duration"], "radius": self.cfg["ring_radius"],
-            "alpha": self.cfg["ring_alpha"], "width": self.cfg["ring_width"], "drawn": 0,
+            "alpha": self.cfg["ring_alpha"], "width": self.cfg["ring_width"],
+            "count": ANIMATION_STYLES[self.cfg.get("animation_style", "single")][1],
+            "drawn": 0,
         })
 
     def tick(self):
@@ -975,6 +1012,10 @@ def self_test():
     assert clamp("500", 5, 100, 95) == 100
     assert color_ok("#a1B2c3", "#ffffff") == "#a1b2c3"
     assert color_ok("bad", "#ffffff") == "#ffffff"
+    assert ANIMATION_STYLES["single"][1] == 1
+    assert ANIMATION_STYLES["ripple"][1] == 2
+    assert ANIMATION_STYLES["waves"][1] == 4
+    assert "без паутины" in ANIMATION_STYLES["single"][0]
     print("Linux core self-tests: OK")
 
 
