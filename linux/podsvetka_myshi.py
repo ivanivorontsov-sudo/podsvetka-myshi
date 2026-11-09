@@ -3,6 +3,7 @@
 # Copyright (c) 2026 Ivan Vorontsov. MIT license.
 import argparse
 import fcntl
+import inspect
 import json
 import logging
 import math
@@ -31,7 +32,7 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 ANIMATION_STYLES = {
     "single": ("Одиночный импульс — без паутины", 1),
     "ripple": ("Двойная рябь", 2),
@@ -246,6 +247,9 @@ class App:
         self.running = True
         self.stop = threading.Event()
         self.server = None
+        # Keep modal GTK dialogs visible to shutdown(); Gtk.Dialog.run() starts
+        # a nested main loop which Gtk.main_quit() alone does not reliably close.
+        self.active_dialogs = []
         self.wayland_mode = WAYLAND_SESSION
         self.dbus = None
         self.dbus_bus = None
@@ -831,7 +835,14 @@ class App:
         grid.attach(autostart, 0, 13, 2, 1)
         dlg.show_all()
 
-        if dlg.run() == Gtk.ResponseType.OK:
+        self.active_dialogs.append(dlg)
+        try:
+            response = dlg.run()
+        finally:
+            if dlg in self.active_dialogs:
+                self.active_dialogs.remove(dlg)
+
+        if response == Gtk.ResponseType.OK:
             cfg.update({
                 "enabled": enabled.get_active(),
                 "only_moving": moving.get_active(),
@@ -882,8 +893,13 @@ class App:
                                 message_type=Gtk.MessageType.ERROR,
                                 buttons=Gtk.ButtonsType.OK, text="Подсветка мыши")
         dlg.format_secondary_text(message)
-        dlg.run()
-        dlg.destroy()
+        self.active_dialogs.append(dlg)
+        try:
+            dlg.run()
+        finally:
+            if dlg in self.active_dialogs:
+                self.active_dialogs.remove(dlg)
+            dlg.destroy()
 
     def invalidate(self, x, y, radius):
         m = int(radius + self.cfg["ring_width"] + 5)
@@ -980,6 +996,16 @@ class App:
     def shutdown(self):
         if not self.running:
             return False
+
+        # A modal dialog runs its own nested GTK loop. Send a response to every
+        # open dialog (innermost first) so --quit can unwind those loops and
+        # release the single-instance flock instead of leaving a ghost process.
+        for dialog in reversed(list(self.active_dialogs)):
+            try:
+                dialog.response(Gtk.ResponseType.CANCEL)
+            except Exception as exc:
+                log("Не удалось закрыть модальное окно при выходе", exc)
+
         self.running = False
         self.stop.set()
         try:
@@ -1056,6 +1082,10 @@ def self_test():
     assert ANIMATION_STYLES["ripple"][1] == 2
     assert ANIMATION_STYLES["waves"][1] == 4
     assert "без паутины" in ANIMATION_STYLES["single"][0]
+    # Guard the shutdown regression: every modal dialog must be tracked and
+    # answered before Gtk.main_quit(), or the process can retain its flock.
+    assert "self.active_dialogs.append(dlg)" in inspect.getsource(App.settings_dialog)
+    assert "dialog.response(Gtk.ResponseType.CANCEL)" in inspect.getsource(App.shutdown)
     print("Linux core self-tests: OK")
 
 
