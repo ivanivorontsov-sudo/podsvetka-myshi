@@ -8,7 +8,8 @@
 #include <kwin/effect/effect.h>
 #include <kwin/effect/effecthandler.h>
 #include <kwin/opengl/glutils.h>
-#include <kwin/opengl/gltexture.h>
+#include <kwin/opengl/glshader.h>
+#include <kwin/opengl/glshadermanager.h>
 #include <kwin/opengl/glvertexbuffer.h>
 
 #include <KConfigGroup>
@@ -209,55 +210,37 @@ private:
                       float cy,
                       float radius)
     {
-        if (!m_aaTexture) {
+        if (!m_circleShader) {
             return;
         }
 
-        // A wider, scale-aware alpha fringe smooths the contour over 1.5 device pixels.
-        // 512 segments keep even the largest configured ring geometrically round.
-        static constexpr int segments = 512;
+        // Render the ring as a screen-aligned quad. The fragment shader uses
+        // the analytic signed distance to a circle and fwidth() for true
+        // per-fragment antialiasing. This avoids polygon-edge stair-stepping
+        // entirely, even when the ring expands to several hundred pixels.
         const float scale = viewport.scale();
         const float scaledRadius = radius * scale;
         const float halfStroke = std::max(0.5f, m_lineWidth * scale * 0.5f);
-        constexpr float aaFringe = 1.5f;
-        const float outerRadius = scaledRadius + halfStroke + aaFringe;
-        const float innerRadius = std::max(0.0f, scaledRadius - halfStroke - aaFringe);
+        const float boxHalfSize = scaledRadius + halfStroke + 2.0f;
         const float centerX = cx * scale;
         const float centerY = cy * scale;
 
-        std::vector<GLVertex2D> vertices;
-        vertices.reserve((segments + 1) * 2);
-        for (int i = 0; i <= segments; ++i) {
-            const float angle = (2.0f * float(M_PI) * float(i)) / float(segments);
-            const float x = std::cos(angle);
-            const float y = std::sin(angle);
+        m_circleShader->setUniform("geometryColor", color);
+        m_circleShader->setUniform("ringRadius", scaledRadius);
+        m_circleShader->setUniform("halfStroke", halfStroke);
+        m_circleShader->setUniform("boxHalfSize", boxHalfSize);
 
-            GLVertex2D outer;
-            outer.position = QVector2D(centerX + x * outerRadius,
-                                       centerY + y * outerRadius);
-            outer.texcoord = QVector2D(0.0f, 0.5f);
-            vertices.push_back(outer);
+        const std::array<GLVertex2D, 4> vertices = {{
+            {QVector2D(centerX - boxHalfSize, centerY - boxHalfSize), QVector2D(0.0f, 0.0f)},
+            {QVector2D(centerX + boxHalfSize, centerY - boxHalfSize), QVector2D(1.0f, 0.0f)},
+            {QVector2D(centerX - boxHalfSize, centerY + boxHalfSize), QVector2D(0.0f, 1.0f)},
+            {QVector2D(centerX + boxHalfSize, centerY + boxHalfSize), QVector2D(1.0f, 1.0f)},
+        }};
 
-            GLVertex2D inner;
-            inner.position = QVector2D(centerX + x * innerRadius,
-                                       centerY + y * innerRadius);
-            inner.texcoord = QVector2D(1.0f, 0.5f);
-            vertices.push_back(inner);
-        }
-
-        GLShader *shader = ShaderManager::instance()->getBoundShader();
-        shader->setUniform(GLShader::Vec4Uniform::ModulationConstant,
-                           QVector4D(color.redF() * color.alphaF(),
-                                     color.greenF() * color.alphaF(),
-                                     color.blueF() * color.alphaF(), color.alphaF()));
-
-        glActiveTexture(GL_TEXTURE0);
-        m_aaTexture->bind();
         GLVertexBuffer *buffer = GLVertexBuffer::streamingBuffer();
         buffer->reset();
         buffer->setVertices(vertices);
         buffer->render(GL_TRIANGLE_STRIP);
-        m_aaTexture->unbind();
     }
 
     void drawCircleQPainter(const QColor &color, float cx, float cy, float radius)
@@ -277,66 +260,67 @@ private:
         painter->restore();
     }
 
-    bool ensureAntialiasTexture(float edgeFraction)
-    {
-        edgeFraction = std::clamp(edgeFraction, 0.02f, 0.48f);
-        if (m_aaTexture && std::abs(m_aaEdgeFraction - edgeFraction) < 0.002f) {
-            return true;
-        }
-
-        // Rebuild the 1D coverage ramp when DPI or line width changes. The
-        // transparent fringe therefore stays 1.5 physical pixels wide.
-        constexpr int textureWidth = 512;
-        const float edge = edgeFraction;
-        QImage image(textureWidth, 1, QImage::Format_ARGB32_Premultiplied);
-        if (image.isNull()) {
-            return false;
-        }
-        image.fill(Qt::transparent);
-
-        for (int x = 0; x < textureWidth; ++x) {
-            const float t = float(x) / float(textureWidth - 1);
-            float coverage = 1.0f;
-            if (t < edge) {
-                const float u = t / edge;
-                coverage = u * u * (3.0f - 2.0f * u);
-            } else if (t > 1.0f - edge) {
-                const float u = (1.0f - t) / edge;
-                coverage = u * u * (3.0f - 2.0f * u);
-            }
-            const int alpha = int(std::lround(coverage * 255.0f));
-            image.setPixel(x, 0, qRgba(alpha, alpha, alpha, alpha));
-        }
-
-        m_aaTexture = GLTexture::upload(image);
-        if (!m_aaTexture) {
-            return false;
-        }
-        m_aaTexture->setFilter(GL_LINEAR);
-        m_aaTexture->setWrapMode(GL_CLAMP_TO_EDGE);
-        m_aaEdgeFraction = edgeFraction;
-        return true;
-    }
-
     bool paintScreenSetupGl(const RenderTarget &renderTarget,
                             const QMatrix4x4 &projectionMatrix,
-                            float scale)
+                            float)
     {
-        constexpr float aaFringe = 1.5f;
-        const float halfStroke = std::max(0.5f, m_lineWidth * scale * 0.5f);
-        const float edgeFraction = aaFringe / (2.0f * (halfStroke + aaFringe));
-        if (!ensureAntialiasTexture(edgeFraction)) {
-            return false;
+        if (!m_circleShader) {
+            static const QByteArray vertexSource = R"GLSL(
+#version 140
+in vec4 position;
+in vec4 texcoord;
+out vec2 texcoord0;
+uniform mat4 modelViewProjectionMatrix;
+void main()
+{
+    texcoord0 = texcoord.st;
+    gl_Position = modelViewProjectionMatrix * position;
+}
+)GLSL";
+
+            static const QByteArray fragmentSource = R"GLSL(
+#version 140
+in vec2 texcoord0;
+uniform vec4 geometryColor;
+uniform float ringRadius;
+uniform float halfStroke;
+uniform float boxHalfSize;
+#include "colormanagement.glsl"
+out vec4 fragColor;
+void main()
+{
+    vec2 point = (texcoord0 * 2.0 - 1.0) * boxHalfSize;
+    float distanceToRing = abs(length(point) - ringRadius) - halfStroke;
+    float antialiasWidth = max(fwidth(distanceToRing), 0.75);
+    float coverage = 1.0 - smoothstep(-antialiasWidth, antialiasWidth, distanceToRing);
+    if (coverage <= 0.0) {
+        discard;
+    }
+
+    // KWin's scene uses premultiplied-alpha blending.
+    vec4 result = geometryColor;
+    result.rgb *= result.a * coverage;
+    result.a *= coverage;
+    result = sourceEncodingToNitsInDestinationColorspace(result);
+    fragColor = nitsToDestinationEncoding(result);
+}
+)GLSL";
+
+            m_circleShader = ShaderManager::instance()->generateCustomShader(
+                ShaderTrait::UniformColor | ShaderTrait::TransformColorspace,
+                vertexSource, fragmentSource);
+            if (!m_circleShader || !m_circleShader->isValid()) {
+                m_circleShader.reset();
+                return false;
+            }
         }
 
-        GLShader *shader = ShaderManager::instance()->pushShader(
-            ShaderTrait::MapTexture | ShaderTrait::Modulate | ShaderTrait::TransformColorspace);
-        shader->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix,
-                           projectionMatrix);
-        shader->setUniform(GLShader::IntUniform::Sampler, 0);
-        shader->setColorspaceUniforms(ColorDescription::sRGB,
-                                      renderTarget.colorDescription(),
-                                      RenderingIntent::Perceptual);
+        ShaderManager::instance()->pushShader(m_circleShader.get());
+        m_circleShader->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix,
+                                   projectionMatrix);
+        m_circleShader->setColorspaceUniforms(ColorDescription::sRGB,
+                                              renderTarget.colorDescription(),
+                                              RenderingIntent::Perceptual);
         glEnable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         return true;
@@ -357,8 +341,7 @@ private:
     float m_ringMaxSize = 24.0f;
     std::chrono::milliseconds m_lastPresentTime = std::chrono::milliseconds::zero();
     std::deque<ClickEvent> m_clicks;
-    std::unique_ptr<GLTexture> m_aaTexture;
-    float m_aaEdgeFraction = -1.0f;
+    std::unique_ptr<GLShader> m_circleShader;
 };
 
 KWIN_EFFECT_FACTORY(PodsvetkaClickEffect, "podsvetka_click.json")
