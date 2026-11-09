@@ -20,3 +20,12 @@
 - Fixed clean application shutdown while the settings dialog or an error dialog is open.
 - The shutdown routine now responds to active modal dialogs before quitting the main GTK loop, allowing the process to release its instance lock.
 - CI now opens the settings dialog during the GUI smoke test and verifies that the application exits through --quit.
+
+
+## 1.2.0 — 2026-11-09
+- Replaced KWin's built-in Mouse Click Animation with a small native KWin effect for KDE Plasma Wayland.
+- The new effect animates only the button-down transition and ignores button-up, guaranteeing one animation per physical click.
+- The built-in mouseclick effect is explicitly disabled/unloaded to avoid overlapping effects.
+- Preserves the three animation presets (1, 2, or 4 waves), colors, radius, thickness, and duration settings.
+- The KWin plugin is built against Debian 13 / KWin 6.3.6 development files and shipped inside the amd64 Debian package.
+- A Plasma logout/login is required once after installation so KWin scans the newly installed native effect plugin.
