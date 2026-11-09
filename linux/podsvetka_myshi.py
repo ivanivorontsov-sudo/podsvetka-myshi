@@ -31,7 +31,7 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 DEFAULTS = {
     "enabled": True, "only_moving": False, "glow_color": "#ffd54f",
     "glow_size": 110, "glow_alpha": 35, "click_effect": True,
@@ -78,11 +78,14 @@ def rgb(value):
 
 
 def parse_kwin_mouseclick_state(report):
-    """Return KWin MouseClickEffect's runtime enabled property, if present."""
-    match = re.search(r"(?im)^\s*enabled\s*:\s*(true|false)\s*$", str(report))
+    """Return MouseClickEffect.enabled from KWin's textual property dump."""
+    match = re.search(
+        r"(?im)^\\s*enabled\\s*:\\s*(true|false|1|0|yes|no|on|off)\\s*$",
+        str(report),
+    )
     if not match:
         return None
-    return match.group(1).lower() == "true"
+    return match.group(1).lower() in ("true", "1", "yes", "on")
 
 
 def load_settings():
@@ -461,63 +464,68 @@ class App:
         raise RuntimeError("KWin не загрузил эффект mouseclick за 2 секунды.")
 
     def _kwin_mouseclick_state(self):
-        """Read the runtime 'enabled' Q_PROPERTY from the loaded KWin effect."""
+        """Read the actual enabled property exposed by KWin for mouseclick."""
         try:
             effects = self._kwin_effects_interface()
-            if not bool(effects.isEffectLoaded("mouseclick")):
+            loaded = bool(effects.isEffectLoaded("mouseclick"))
+            if not loaded:
+                log("Проверка mouseclick: плагин не загружен")
                 return None
-            # This effect-specific D-Bus API is machine-readable; the global
-            # /KWin support report is intended for diagnostics, not state sync.
             report = str(effects.supportInformation("mouseclick"))
-            return parse_kwin_mouseclick_state(report)
+            state = parse_kwin_mouseclick_state(report)
+            if state is None:
+                log(
+                    "KWin не вернул свойство enabled в supportInformation(mouseclick): "
+                    + repr(report)
+                )
+            return state
         except Exception as exc:
-            log("Не удалось прочитать состояние эффекта Mouse Click Animation через /Effects", exc)
+            log("Не удалось прочитать состояние Mouse Click Animation", exc)
             return None
 
     def _invoke_kwin_mouseclick_toggle(self):
-        """Invoke the version-specific KWin action object name.
-
-        KWin 6.3 renamed the action object from ToggleMouseClick to
-        ToggleMouseClickAnimation. invokeShortcut() silently ignores unknown
-        action names on some releases, so trying aliases in a loop is unsafe:
-        it can report success without toggling the effect.
-        """
+        """Invoke the action name actually registered by KWin in KGlobalAccel."""
         obj = self.dbus_bus.get_object("org.kde.kglobalaccel", "/component/kwin")
         iface = self.dbus.Interface(obj, "org.kde.kglobalaccel.Component")
-        version_text = ""
-        for executable in ("kwin_wayland", "kwin_x11", "kwin"):
-            path = shutil.which(executable)
-            if not path:
-                continue
-            try:
-                result = subprocess.run(
-                    [path, "--version"], check=False, capture_output=True,
-                    text=True, timeout=2,
-                )
-                version_text = (result.stdout + " " + result.stderr).strip()
-                if version_text:
-                    break
-            except Exception as exc:
-                log("Не удалось определить версию KWin через " + executable, exc)
-        match = re.search(r"\b(\d+)\.(\d+)", version_text)
-        if not match:
+
+        try:
+            names = [str(name) for name in iface.shortcutNames()]
+        except Exception as exc:
             raise RuntimeError(
-                "Не удалось определить версию KWin для переключения анимации. "
-                "Вывод команды: " + (version_text or "(пусто)")
-            )
-        major, minor = int(match.group(1)), int(match.group(2))
-        action = (
-            "ToggleMouseClickAnimation"
-            if major > 6 or (major == 6 and minor >= 3)
-            else "ToggleMouseClick"
-        )
+                "Не удалось получить список действий KWin из KGlobalAccel: " + str(exc)
+            ) from exc
+
+        # KWin 6.3 renamed this action, but distribution patches and older
+        # versions can retain the previous object name. invokeShortcut() is
+        # intentionally silent for unknown names, so never guess blindly.
+        preferred = ("ToggleMouseClickAnimation", "ToggleMouseClick")
+        action = next((name for name in preferred if name in names), None)
+        if action is None:
+            candidates = [
+                name for name in names
+                if "mouseclick" in name.lower().replace("_", "")
+                or ("mouse" in name.lower() and "click" in name.lower())
+            ]
+            if len(candidates) == 1:
+                action = candidates[0]
+            else:
+                raise RuntimeError(
+                    "Не найдено однозначное действие переключения Mouse Click Animation. "
+                    "Зарегистрированные действия KWin: " + (", ".join(names) or "(пусто)")
+                )
+
         try:
             iface.invokeShortcut(action)
             time.sleep(0.25)
-            log("Вызвана команда KWin " + action + " (" + version_text + ")")
+            log(
+                "Вызвана зарегистрированная команда KWin "
+                + action + "; доступные действия: " + ", ".join(names)
+            )
+            return action
         except Exception as exc:
             raise RuntimeError(
-                "KWin не принял команду " + action + ": " + str(exc)
+                "KGlobalAccel не принял зарегистрированную команду "
+                + action + ": " + str(exc)
             ) from exc
 
     def configure_kwin_mouseclick(self, enabled, persist=False):
@@ -956,6 +964,8 @@ def set_autostart(enabled):
 def self_test():
     assert parse_kwin_mouseclick_state("mouseclick:\nenabled: true\n") is True
     assert parse_kwin_mouseclick_state("mouseclick:\nenabled: false\n") is False
+    assert parse_kwin_mouseclick_state("mouseclick:\nenabled: 1\n") is True
+    assert parse_kwin_mouseclick_state("mouseclick:\nenabled: 0\n") is False
     assert parse_kwin_mouseclick_state("mouseclick:\nringSize: 18\n") is None
     assert ease_out(0) == 0 and ease_out(1) == 1
     assert 0 < ease_out(0.5) < 1
