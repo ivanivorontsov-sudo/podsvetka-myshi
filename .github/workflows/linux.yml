@@ -48,7 +48,8 @@ jobs:
           grep -q 'pressedNow' linux/kwin-effect/podsvetka_click.cpp
           ! grep -q 'isReleased' linux/kwin-effect/podsvetka_click.cpp
           ! grep -q 'oldButtons.*m_ringLife' linux/kwin-effect/podsvetka_click.cpp
-          grep -q 'startMousePolling' linux/kwin-effect/podsvetka_click.cpp
+          grep -q 'connect(effects, &EffectsHandler::mouseChanged' linux/kwin-effect/podsvetka_click.cpp
+          ! grep -q 'startMousePolling\|stopMousePolling' linux/kwin-effect/podsvetka_click.cpp
           grep -q 'KWin::kwin' linux/kwin-effect/CMakeLists.txt
           grep -q 'ANIMATION_STYLES' linux/podsvetka_myshi.py
           grep -q 'set_animation_style' linux/podsvetka_myshi.py
