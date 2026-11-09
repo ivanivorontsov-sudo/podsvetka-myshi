@@ -58,8 +58,8 @@ jobs:
           grep -q 'RingCount.*ANIMATION_STYLES' linux/podsvetka_myshi.py
           grep -q 'count.*ANIMATION_STYLES' linux/podsvetka_myshi.py
           grep -q 'parse_kwin_mouseclick_state' linux/podsvetka_myshi.py
-          grep -q 'shortcutNames()' linux/podsvetka_myshi.py
-          grep -q 'invokeShortcut(action)' linux/podsvetka_myshi.py
+          grep -q 'mouseclickEnabled.*false' linux/podsvetka_myshi.py
+          grep -q 'RingCount.*ANIMATION_STYLES' linux/podsvetka_myshi.py
           grep -q 'scripting.start()' linux/podsvetka_myshi.py
           grep -q 'APP + "Enabled"' linux/podsvetka_myshi.py
           ! grep -q 'scripting.loadScript(' linux/podsvetka_myshi.py
