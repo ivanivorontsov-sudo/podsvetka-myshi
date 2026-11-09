@@ -49,6 +49,9 @@ jobs:
           ! grep -q 'isReleased' linux/kwin-effect/podsvetka_click.cpp
           ! grep -q 'oldButtons.*m_ringLife' linux/kwin-effect/podsvetka_click.cpp
           grep -q 'connect(effects, &EffectsHandler::mouseChanged' linux/kwin-effect/podsvetka_click.cpp
+          grep -q 'fwidth(distanceToRing)' linux/kwin-effect/podsvetka_click.cpp
+          grep -q 'generateCustomShader' linux/kwin-effect/podsvetka_click.cpp
+          ! grep -q 'GL_TRIANGLE_STRIP.*aaTexture\|ensureAntialiasTexture\|m_aaTexture' linux/kwin-effect/podsvetka_click.cpp
           ! grep -q 'startMousePolling\|stopMousePolling' linux/kwin-effect/podsvetka_click.cpp
           grep -q 'KWin::kwin' linux/kwin-effect/CMakeLists.txt
           grep -q 'ANIMATION_STYLES' linux/podsvetka_myshi.py
@@ -145,7 +148,7 @@ jobs:
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.2.2"
+          VERSION="1.2.3"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi" "$PKG/usr/share/kwin/scripts/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
