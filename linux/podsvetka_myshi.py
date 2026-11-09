@@ -31,7 +31,7 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 ANIMATION_STYLES = {
     "single": ("Одиночный импульс — без паутины", 1),
     "ripple": ("Двойная рябь", 2),
@@ -327,6 +327,27 @@ class App:
 
     def tray_menu(self, icon, button, timestamp):
         menu = Gtk.Menu()
+
+        # Put the animation selector directly in the tray context menu as well
+        # as in the full settings dialog, so the choice is discoverable.
+        styles_menu = Gtk.Menu()
+        group = None
+        for style_id, (style_label, _ring_count) in ANIMATION_STYLES.items():
+            item = Gtk.RadioMenuItem.new_with_label(group, style_label)
+            if group is None:
+                group = item.get_group()
+            item.set_active(self.cfg.get("animation_style", "single") == style_id)
+            item.connect(
+                "toggled",
+                lambda widget, selected=style_id:
+                    self.set_animation_style(selected) if widget.get_active() else None
+            )
+            styles_menu.append(item)
+        styles_item = Gtk.MenuItem.new_with_label("Анимация щелчков")
+        styles_item.set_submenu(styles_menu)
+        menu.append(styles_item)
+        menu.append(Gtk.SeparatorMenuItem())
+
         for label, callback in (
             ("Настройки…", lambda: self.settings_dialog()),
             ("Переключить подсветку", lambda: self.handle("toggle")),
@@ -337,6 +358,25 @@ class App:
             menu.append(item)
         menu.show_all()
         menu.popup(None, None, None, None, button, timestamp)
+
+    def set_animation_style(self, style_id):
+        """Apply a click animation preset from the tray menu immediately."""
+        if style_id not in ANIMATION_STYLES:
+            log("Неизвестный стиль анимации: " + str(style_id))
+            return
+        if self.cfg.get("animation_style", "single") == style_id:
+            return
+        self.cfg["animation_style"] = style_id
+        try:
+            save_settings(self.cfg)
+            if self.wayland_mode and self.cfg.get("click_effect", True):
+                self.configure_kwin_mouseclick(True, persist=True)
+            self.rings.clear()
+            self.window.queue_draw()
+            log("Выбран стиль анимации щелчка: " + style_id)
+        except Exception as exc:
+            log("Не удалось применить стиль анимации щелчка", exc)
+            self.message_error("Не удалось применить стиль анимации: " + str(exc))
 
     def start_ipc(self):
         try:
