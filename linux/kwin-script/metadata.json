@@ -11,7 +11,7 @@
     "Id": "podsvetka-myshi",
     "License": "MIT",
     "Name": "Подсветка мыши — KDE Wayland",
-    "Version": "1.1.1"
+    "Version": "1.1.2"
   },
   "X-Plasma-API": "javascript",
   "X-Plasma-MainScript": "code/main.js"
