@@ -33,7 +33,7 @@ from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
 KWIN_CLICK_EFFECT = "podsvetka-click"
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 ANIMATION_STYLES = {
     "single": ("Одиночный импульс — без паутины", 1),
     "ripple": ("Двойная рябь", 2),
