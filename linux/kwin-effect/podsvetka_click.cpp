@@ -86,7 +86,7 @@ public:
         effects->paintScreen(renderTarget, viewport, mask, region, screen);
 
         const bool glReady = effects->isOpenGLCompositing()
-            && paintScreenSetupGl(renderTarget, viewport.projectionMatrix());
+            && paintScreenSetupGl(renderTarget, viewport.projectionMatrix(), viewport.scale());
 
         for (const ClickEvent &click : m_clicks) {
             const float ringDistance = float(m_ringLife) / float(m_ringCount * 3);
@@ -159,7 +159,7 @@ private Q_SLOTS:
             const Qt::MouseButtons button = buttonMasks[size_t(i)];
             const bool pressedNow = (buttons & button) && !(oldButtons & button);
             if (pressedNow) {
-                m_clicks.push_back({i, position.toPoint(), 0});
+                m_clicks.push_back({i, position, 0});
                 const int radius = int(m_ringMaxSize + m_lineWidth + 4);
                 effects->addRepaint(QRect(position.toPoint() - QPoint(radius, radius),
                                           QSize(radius * 2, radius * 2)));
@@ -172,7 +172,7 @@ private:
     struct ClickEvent
     {
         int button;
-        QPoint position;
+        QPointF position;
         int time;
     };
 
@@ -184,7 +184,7 @@ private:
         QRegion dirty;
         const int radius = int(m_ringMaxSize + m_lineWidth + 4);
         for (const ClickEvent &click : m_clicks) {
-            dirty += QRect(click.position - QPoint(radius, radius),
+            dirty += QRect(click.position.toPoint() - QPoint(radius, radius),
                            QSize(radius * 2, radius * 2));
         }
         effects->addRepaint(dirty);
@@ -213,15 +213,15 @@ private:
             return;
         }
 
-        // Draw a triangle-strip ring with a one-device-pixel alpha fringe.
-        // Unlike GL_LINE_LOOP, this is antialiased in core OpenGL contexts
-        // where legacy GL_LINE_SMOOTH is unavailable or ignored.
-        static constexpr int segments = 256;
+        // A wider, scale-aware alpha fringe smooths the contour over 1.5 device pixels.
+        // 512 segments keep even the largest configured ring geometrically round.
+        static constexpr int segments = 512;
         const float scale = viewport.scale();
         const float scaledRadius = radius * scale;
         const float halfStroke = std::max(0.5f, m_lineWidth * scale * 0.5f);
-        const float outerRadius = scaledRadius + halfStroke + 1.0f;
-        const float innerRadius = std::max(0.0f, scaledRadius - halfStroke - 1.0f);
+        constexpr float aaFringe = 1.5f;
+        const float outerRadius = scaledRadius + halfStroke + aaFringe;
+        const float innerRadius = std::max(0.0f, scaledRadius - halfStroke - aaFringe);
         const float centerX = cx * scale;
         const float centerY = cy * scale;
 
@@ -247,8 +247,9 @@ private:
 
         GLShader *shader = ShaderManager::instance()->getBoundShader();
         shader->setUniform(GLShader::Vec4Uniform::ModulationConstant,
-                           QVector4D(color.redF(), color.greenF(),
-                                     color.blueF(), color.alphaF()));
+                           QVector4D(color.redF() * color.alphaF(),
+                                     color.greenF() * color.alphaF(),
+                                     color.blueF() * color.alphaF(), color.alphaF()));
 
         glActiveTexture(GL_TEXTURE0);
         m_aaTexture->bind();
@@ -276,16 +277,17 @@ private:
         painter->restore();
     }
 
-    bool ensureAntialiasTexture()
+    bool ensureAntialiasTexture(float edgeFraction)
     {
-        if (m_aaTexture) {
+        edgeFraction = std::clamp(edgeFraction, 0.02f, 0.48f);
+        if (m_aaTexture && std::abs(m_aaEdgeFraction - edgeFraction) < 0.002f) {
             return true;
         }
 
-        // A smooth 1D coverage profile is sampled across the ring thickness.
-        // Linear texture filtering turns the edge into subpixel coverage.
-        constexpr int textureWidth = 256;
-        constexpr float edge = 0.18f;
+        // Rebuild the 1D coverage ramp when DPI or line width changes. The
+        // transparent fringe therefore stays 1.5 physical pixels wide.
+        constexpr int textureWidth = 512;
+        const float edge = edgeFraction;
         QImage image(textureWidth, 1, QImage::Format_ARGB32_Premultiplied);
         if (image.isNull()) {
             return false;
@@ -312,13 +314,18 @@ private:
         }
         m_aaTexture->setFilter(GL_LINEAR);
         m_aaTexture->setWrapMode(GL_CLAMP_TO_EDGE);
+        m_aaEdgeFraction = edgeFraction;
         return true;
     }
 
     bool paintScreenSetupGl(const RenderTarget &renderTarget,
-                            const QMatrix4x4 &projectionMatrix)
+                            const QMatrix4x4 &projectionMatrix,
+                            float scale)
     {
-        if (!ensureAntialiasTexture()) {
+        constexpr float aaFringe = 1.5f;
+        const float halfStroke = std::max(0.5f, m_lineWidth * scale * 0.5f);
+        const float edgeFraction = aaFringe / (2.0f * (halfStroke + aaFringe));
+        if (!ensureAntialiasTexture(edgeFraction)) {
             return false;
         }
 
@@ -351,6 +358,7 @@ private:
     std::chrono::milliseconds m_lastPresentTime = std::chrono::milliseconds::zero();
     std::deque<ClickEvent> m_clicks;
     std::unique_ptr<GLTexture> m_aaTexture;
+    float m_aaEdgeFraction = -1.0f;
 };
 
 KWIN_EFFECT_FACTORY(PodsvetkaClickEffect, "podsvetka_click.json")
