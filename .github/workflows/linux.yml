@@ -134,10 +134,12 @@ jobs:
               build-essential cmake ninja-build extra-cmake-modules kwin-dev libepoxy-dev \
               qt6-base-dev libkf6coreaddons-dev libkf6config-dev
             cmake -S linux/kwin-effect -B build/kwin-effect -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+              -DKDE_INSTALL_QTPLUGINDIR=lib/x86_64-linux-gnu/qt6/plugins
             cmake --build build/kwin-effect --parallel 2
             DESTDIR=/work/build/deb cmake --install build/kwin-effect
-            test -n "$(find /work/build/deb -type f -name "*podsvetka-click*.so" -print -quit)"
+            test -f /work/build/deb/usr/lib/x86_64-linux-gnu/qt6/plugins/kwin/effects/plugins/podsvetka-click.so
+            chown -R "$(id -u):$(id -g)" /work/build/deb
           '
 
       - name: Сборка Debian-пакета
@@ -183,7 +185,7 @@ jobs:
           EOF
           dpkg-deb --root-owner-group --build "$PKG" "build/podsvetka-myshi_${VERSION}_amd64.deb"
           dpkg-deb --info "build/podsvetka-myshi_${VERSION}_amd64.deb"
-          find "$PKG" -type f -name "*podsvetka-click*.so" -exec ldd {} ;
+          find "$PKG/usr/lib" -path '*/qt6/plugins/kwin/effects/plugins/podsvetka-click.so' -exec ldd {} +
           sha256sum "build/podsvetka-myshi_${VERSION}_amd64.deb" > "build/podsvetka-myshi_${VERSION}_amd64.deb.sha256"
 
       - name: Загрузить Debian-пакет
