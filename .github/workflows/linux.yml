@@ -32,6 +32,7 @@ jobs:
 
       - name: Проверка Python и shell
         run: |
+          set -euxo pipefail
           /usr/bin/python3 -m py_compile linux/podsvetka_myshi.py
           /usr/bin/python3 linux/podsvetka_myshi.py --self-test
           /usr/bin/python3 -m json.tool linux/kwin-script/metadata.json >/dev/null
@@ -42,7 +43,7 @@ jobs:
           grep -q 'isEffectSupported(KWIN_CLICK_EFFECT)' linux/podsvetka_myshi.py
           grep -q 'supportInformation(KWIN_CLICK_EFFECT)' linux/podsvetka_myshi.py
           grep -q 'def _ensure_kwin_mouseclick_loaded' linux/podsvetka_myshi.py
-          grep -q 'Effect-podsvetka-click' linux/podsvetka_myshi.py
+          grep -q '"Effect-" + KWIN_CLICK_EFFECT' linux/podsvetka_myshi.py
           grep -q 'KWIN_EFFECT_FACTORY(PodsvetkaClickEffect' linux/kwin-effect/podsvetka_click.cpp
           grep -q 'pressedNow' linux/kwin-effect/podsvetka_click.cpp
           ! grep -q 'isReleased' linux/kwin-effect/podsvetka_click.cpp
