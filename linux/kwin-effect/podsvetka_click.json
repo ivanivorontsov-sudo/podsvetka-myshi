@@ -1,0 +1,12 @@
+{
+  "KPlugin": {
+    "Id": "podsvetka-click",
+    "Name": "Подсветка мыши — одиночный щелчок",
+    "Description": "Одна анимация на нажатие кнопки мыши без дублирования на отпускании",
+    "Category": "Accessibility",
+    "Icon": "input-mouse",
+    "EnabledByDefault": false,
+    "License": "MIT",
+    "Version": "1.0"
+  }
+}
