@@ -8,6 +8,8 @@
 #include <kwin/effect/effect.h>
 #include <kwin/effect/effecthandler.h>
 #include <kwin/opengl/glutils.h>
+#include <kwin/opengl/gltexture.h>
+#include <kwin/opengl/glvertexbuffer.h>
 
 #include <KConfigGroup>
 
@@ -19,6 +21,8 @@
 #include <array>
 #include <cmath>
 #include <deque>
+#include <memory>
+#include <vector>
 
 namespace KWin
 {
@@ -81,9 +85,8 @@ public:
     {
         effects->paintScreen(renderTarget, viewport, mask, region, screen);
 
-        if (effects->isOpenGLCompositing()) {
-            paintScreenSetupGl(renderTarget, viewport.projectionMatrix());
-        }
+        const bool glReady = effects->isOpenGLCompositing()
+            && paintScreenSetupGl(renderTarget, viewport.projectionMatrix());
 
         for (const ClickEvent &click : m_clicks) {
             const float ringDistance = float(m_ringLife) / float(m_ringCount * 3);
@@ -101,7 +104,7 @@ public:
             }
         }
 
-        if (effects->isOpenGLCompositing()) {
+        if (glReady) {
             paintScreenFinishGl();
         }
     }
@@ -206,28 +209,54 @@ private:
                       float cy,
                       float radius)
     {
-        static constexpr int segments = 80;
-        static const float theta = 2.0f * float(M_PI) / float(segments);
-        static const float cosine = std::cos(theta);
-        static const float sine = std::sin(theta);
-        const float scale = viewport.scale();
-        float x = radius;
-        float y = 0.0f;
+        if (!m_aaTexture) {
+            return;
+        }
 
+        // Draw a triangle-strip ring with a one-device-pixel alpha fringe.
+        // Unlike GL_LINE_LOOP, this is antialiased in core OpenGL contexts
+        // where legacy GL_LINE_SMOOTH is unavailable or ignored.
+        static constexpr int segments = 256;
+        const float scale = viewport.scale();
+        const float scaledRadius = radius * scale;
+        const float halfStroke = std::max(0.5f, m_lineWidth * scale * 0.5f);
+        const float outerRadius = scaledRadius + halfStroke + 1.0f;
+        const float innerRadius = std::max(0.0f, scaledRadius - halfStroke - 1.0f);
+        const float centerX = cx * scale;
+        const float centerY = cy * scale;
+
+        std::vector<GLVertex2D> vertices;
+        vertices.reserve((segments + 1) * 2);
+        for (int i = 0; i <= segments; ++i) {
+            const float angle = (2.0f * float(M_PI) * float(i)) / float(segments);
+            const float x = std::cos(angle);
+            const float y = std::sin(angle);
+
+            GLVertex2D outer;
+            outer.position = QVector2D(centerX + x * outerRadius,
+                                       centerY + y * outerRadius);
+            outer.texcoord = QVector2D(0.0f, 0.5f);
+            vertices.push_back(outer);
+
+            GLVertex2D inner;
+            inner.position = QVector2D(centerX + x * innerRadius,
+                                       centerY + y * innerRadius);
+            inner.texcoord = QVector2D(1.0f, 0.5f);
+            vertices.push_back(inner);
+        }
+
+        GLShader *shader = ShaderManager::instance()->getBoundShader();
+        shader->setUniform(GLShader::Vec4Uniform::ModulationConstant,
+                           QVector4D(color.redF(), color.greenF(),
+                                     color.blueF(), color.alphaF()));
+
+        glActiveTexture(GL_TEXTURE0);
+        m_aaTexture->bind();
         GLVertexBuffer *buffer = GLVertexBuffer::streamingBuffer();
         buffer->reset();
-        QList<QVector2D> vertices;
-        vertices.reserve(segments);
-        for (int i = 0; i < segments; ++i) {
-            vertices.push_back(QVector2D((x + cx) * scale, (y + cy) * scale));
-            const float previousX = x;
-            x = cosine * x - sine * y;
-            y = sine * previousX + cosine * y;
-        }
         buffer->setVertices(vertices);
-        ShaderManager::instance()->getBoundShader()->setUniform(
-            GLShader::ColorUniform::Color, color);
-        buffer->render(GL_LINE_LOOP);
+        buffer->render(GL_TRIANGLE_STRIP);
+        m_aaTexture->unbind();
     }
 
     void drawCircleQPainter(const QColor &color, float cx, float cy, float radius)
@@ -237,25 +266,73 @@ private:
             return;
         }
         painter->save();
-        painter->setPen(color);
-        painter->drawArc(QRectF(cx - radius, cy - radius, radius * 2, radius * 2),
-                         0, 5760);
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        QPen pen(color);
+        pen.setWidthF(m_lineWidth);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter->setPen(pen);
+        painter->drawEllipse(QRectF(cx - radius, cy - radius, radius * 2, radius * 2));
         painter->restore();
     }
 
-    void paintScreenSetupGl(const RenderTarget &renderTarget,
+    bool ensureAntialiasTexture()
+    {
+        if (m_aaTexture) {
+            return true;
+        }
+
+        // A smooth 1D coverage profile is sampled across the ring thickness.
+        // Linear texture filtering turns the edge into subpixel coverage.
+        constexpr int textureWidth = 256;
+        constexpr float edge = 0.18f;
+        QImage image(textureWidth, 1, QImage::Format_ARGB32_Premultiplied);
+        if (image.isNull()) {
+            return false;
+        }
+        image.fill(Qt::transparent);
+
+        for (int x = 0; x < textureWidth; ++x) {
+            const float t = float(x) / float(textureWidth - 1);
+            float coverage = 1.0f;
+            if (t < edge) {
+                const float u = t / edge;
+                coverage = u * u * (3.0f - 2.0f * u);
+            } else if (t > 1.0f - edge) {
+                const float u = (1.0f - t) / edge;
+                coverage = u * u * (3.0f - 2.0f * u);
+            }
+            const int alpha = int(std::lround(coverage * 255.0f));
+            image.setPixel(x, 0, qRgba(alpha, alpha, alpha, alpha));
+        }
+
+        m_aaTexture = GLTexture::upload(image);
+        if (!m_aaTexture) {
+            return false;
+        }
+        m_aaTexture->setFilter(GL_LINEAR);
+        m_aaTexture->setWrapMode(GL_CLAMP_TO_EDGE);
+        return true;
+    }
+
+    bool paintScreenSetupGl(const RenderTarget &renderTarget,
                             const QMatrix4x4 &projectionMatrix)
     {
+        if (!ensureAntialiasTexture()) {
+            return false;
+        }
+
         GLShader *shader = ShaderManager::instance()->pushShader(
-            ShaderTrait::UniformColor | ShaderTrait::TransformColorspace);
+            ShaderTrait::MapTexture | ShaderTrait::Modulate | ShaderTrait::TransformColorspace);
         shader->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix,
                            projectionMatrix);
+        shader->setUniform(GLShader::IntUniform::Sampler, 0);
         shader->setColorspaceUniforms(ColorDescription::sRGB,
                                       renderTarget.colorDescription(),
                                       RenderingIntent::Perceptual);
-        glLineWidth(m_lineWidth);
         glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        return true;
     }
 
     void paintScreenFinishGl()
@@ -273,6 +350,7 @@ private:
     float m_ringMaxSize = 24.0f;
     std::chrono::milliseconds m_lastPresentTime = std::chrono::milliseconds::zero();
     std::deque<ClickEvent> m_clicks;
+    std::unique_ptr<GLTexture> m_aaTexture;
 };
 
 KWIN_EFFECT_FACTORY(PodsvetkaClickEffect, "podsvetka_click.json")
