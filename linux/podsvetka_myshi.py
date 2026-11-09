@@ -32,7 +32,8 @@ from gi.repository import Gdk, GLib, Gtk
 from Xlib import X, display as xdisplay
 
 APP = "podsvetka-myshi"
-VERSION = "1.1.5"
+KWIN_CLICK_EFFECT = "podsvetka-click"
+VERSION = "1.2.0"
 ANIMATION_STYLES = {
     "single": ("Одиночный импульс — без паутины", 1),
     "ripple": ("Двойная рябь", 2),
@@ -498,154 +499,125 @@ class App:
         return self.dbus.Interface(obj, "org.kde.kwin.Effects")
 
     def _ensure_kwin_mouseclick_loaded(self):
-        """Load the plugin explicitly; loading and enabling are separate KWin operations."""
+        """Load the custom KWin effect that emits exactly one animation per press."""
         effects = self._kwin_effects_interface()
-        if not bool(effects.isEffectSupported("mouseclick")):
-            raise RuntimeError("Эффект Mouse Click Animation не поддерживается этой сборкой KWin.")
+
+        # KWin's built-in mouseclick effect animates both press and release.
+        # Disable it permanently for this app and use our press-only plugin.
+        self._write_kwin_entries("Plugins", {
+            "mouseclickEnabled": "false",
+            KWIN_CLICK_EFFECT + "Enabled": "false",
+        })
         if bool(effects.isEffectLoaded("mouseclick")):
+            effects.unloadEffect("mouseclick")
+            for _ in range(40):
+                if not bool(effects.isEffectLoaded("mouseclick")):
+                    break
+                time.sleep(0.05)
+
+        if not bool(effects.isEffectSupported(KWIN_CLICK_EFFECT)):
+            raise RuntimeError(
+                "KWin пока не обнаружил эффект «Подсветка мыши — одиночный щелчок». "
+                "После установки версии 1.2.0 один раз выйдите из сеанса Plasma "
+                "и войдите снова: KWin сканирует новые плагины при запуске."
+            )
+
+        if bool(effects.isEffectLoaded(KWIN_CLICK_EFFECT)):
             return
 
-        # loadEffect() loads the plugin. Do not use toggleEffect(): that API
-        # toggles the plugin's loaded state and can unload it.
-        effects.loadEffect("mouseclick")
+        # loadEffect() is idempotent only at the caller level; confirm state
+        # rather than trusting its return value.
+        effects.loadEffect(KWIN_CLICK_EFFECT)
         for _ in range(40):
-            if bool(effects.isEffectLoaded("mouseclick")):
-                log("Плагин KWin mouseclick успешно загружен")
+            if bool(effects.isEffectLoaded(KWIN_CLICK_EFFECT)):
+                log("Пользовательский KWin effect podsvetka-click загружен")
                 return
             time.sleep(0.05)
-        raise RuntimeError("KWin не загрузил эффект mouseclick за 2 секунды.")
+        raise RuntimeError(
+            "KWin не загрузил podsvetka-click. Подробности: "
+            + str(STATE / "app.log")
+        )
 
     def _kwin_mouseclick_state(self):
-        """Read the actual enabled property exposed by KWin for mouseclick."""
+        """Read the loaded/enabled state of the custom press-only effect."""
         try:
             effects = self._kwin_effects_interface()
-            loaded = bool(effects.isEffectLoaded("mouseclick"))
-            if not loaded:
-                log("Проверка mouseclick: плагин не загружен")
-                return None
-            report = str(effects.supportInformation("mouseclick"))
+            if not bool(effects.isEffectLoaded(KWIN_CLICK_EFFECT)):
+                return False
+            report = str(effects.supportInformation(KWIN_CLICK_EFFECT))
             state = parse_kwin_mouseclick_state(report)
             if state is None:
                 log(
-                    "KWin не вернул свойство enabled в supportInformation(mouseclick): "
-                    + repr(report)
+                    "KWin не вернул свойство enabled для "
+                    + KWIN_CLICK_EFFECT + ": " + repr(report)
                 )
             return state
         except Exception as exc:
-            log("Не удалось прочитать состояние Mouse Click Animation", exc)
+            log("Не удалось прочитать состояние пользовательского KWin effect", exc)
             return None
-
-    def _invoke_kwin_mouseclick_toggle(self):
-        """Invoke the action name actually registered by KWin in KGlobalAccel."""
-        obj = self.dbus_bus.get_object("org.kde.kglobalaccel", "/component/kwin")
-        iface = self.dbus.Interface(obj, "org.kde.kglobalaccel.Component")
-
-        try:
-            names = [str(name) for name in iface.shortcutNames()]
-        except Exception as exc:
-            raise RuntimeError(
-                "Не удалось получить список действий KWin из KGlobalAccel: " + str(exc)
-            ) from exc
-
-        # KWin 6.3 renamed this action, but distribution patches and older
-        # versions can retain the previous object name. invokeShortcut() is
-        # intentionally silent for unknown names, so never guess blindly.
-        preferred = ("ToggleMouseClickAnimation", "ToggleMouseClick")
-        action = next((name for name in preferred if name in names), None)
-        if action is None:
-            candidates = [
-                name for name in names
-                if "mouseclick" in name.lower().replace("_", "")
-                or ("mouse" in name.lower() and "click" in name.lower())
-            ]
-            if len(candidates) == 1:
-                action = candidates[0]
-            else:
-                raise RuntimeError(
-                    "Не найдено однозначное действие переключения Mouse Click Animation. "
-                    "Зарегистрированные действия KWin: " + (", ".join(names) or "(пусто)")
-                )
-
-        try:
-            iface.invokeShortcut(action)
-            time.sleep(0.25)
-            log(
-                "Вызвана зарегистрированная команда KWin "
-                + action + "; доступные действия: " + ", ".join(names)
-            )
-            return action
-        except Exception as exc:
-            raise RuntimeError(
-                "KGlobalAccel не принял зарегистрированную команду "
-                + action + ": " + str(exc)
-            ) from exc
 
     def configure_kwin_mouseclick(self, enabled, persist=False):
         """
-        Configure KWin's built-in Mouse Click Animation. KWin receives real
-        button events under Wayland and draws the animated rings itself.
+        Configure the custom KWin effect. Unlike the built-in MouseClickEffect,
+        it reacts only to button-down events, so one physical click creates one
+        animation rather than one on press plus another on release.
         """
         if not self.wayland_mode or self.dbus_bus is None:
             return
 
         enabled = bool(enabled)
-        previous = bool(self.cfg.get("_kwin_click_effect_enabled", False))
         effects = self._kwin_effects_interface()
 
-        if enabled:
-            # Write settings before loading the effect: the plugin reads them
-            # when it is created. Reconfigure an already-loaded plugin too.
-            self._write_kwin_entries("Plugins", {"mouseclickEnabled": "true"})
-            self._write_kwin_entries("Effect-mouseclick", {
-                "Color1": self.cfg["left_color"],
-                "Color2": "#ffffff",
-                "Color3": self.cfg["right_color"],
-                "LineWidth": self.cfg["ring_width"],
-                "RingLife": self.cfg["ring_duration"],
-                "RingSize": self.cfg["ring_radius"],
-                "RingCount": ANIMATION_STYLES[self.cfg.get("animation_style", "single")][1],
-                "ShowText": "false",
-            })
-            self._kwin_interface().reconfigure()
-            self._ensure_kwin_mouseclick_loaded()
-            effects.reconfigureEffect("mouseclick")
-            time.sleep(0.12)
-        elif not bool(effects.isEffectLoaded("mouseclick")):
-            # An unloaded effect cannot be drawing rings. Don't invoke an
-            # unavailable shortcut just to turn off an already-off plugin.
-            self.cfg["_kwin_click_effect_enabled"] = False
-            self.cfg["_kwin_click_session"] = (
-                os.environ.get("XDG_SESSION_ID") or os.environ.get("WAYLAND_DISPLAY", "")
-            )
-            if persist:
-                save_settings(self.cfg)
-            log("Анимация щелчков KWin уже выключена (плагин не загружен)")
-            return
+        # The native KWin effect creates separate animations on both button
+        # transitions. Keep it disabled even when our own effect is turned off.
+        self._write_kwin_entries("Plugins", {
+            "mouseclickEnabled": "false",
+            KWIN_CLICK_EFFECT + "Enabled": "false",
+        })
+        self._write_kwin_entries("Effect-" + KWIN_CLICK_EFFECT, {
+            "Color1": self.cfg["left_color"],
+            "Color2": "#ffffff",
+            "Color3": self.cfg["right_color"],
+            "LineWidth": self.cfg["ring_width"],
+            "RingLife": self.cfg["ring_duration"],
+            "RingSize": self.cfg["ring_radius"],
+            "RingCount": ANIMATION_STYLES[self.cfg.get("animation_style", "single")][1],
+        })
+        self._kwin_interface().reconfigure()
 
-        actual = self._kwin_mouseclick_state()
-        if actual is not None:
-            previous = actual
-
-        if previous != enabled:
-            self._invoke_kwin_mouseclick_toggle()
-            # The shortcut updates MouseClickEffect::enabled asynchronously
-            # through KGlobalAccel. Confirm before persisting the new state.
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:
-                actual = self._kwin_mouseclick_state()
-                if actual is not None and actual == enabled:
+        # Some distributions keep an already-loaded built-in effect alive
+        # after kwinrc was changed. Explicitly unload it before proceeding.
+        if bool(effects.isEffectLoaded("mouseclick")):
+            effects.unloadEffect("mouseclick")
+            for _ in range(40):
+                if not bool(effects.isEffectLoaded("mouseclick")):
                     break
                 time.sleep(0.05)
-            if actual is None or actual != enabled:
+
+        if enabled:
+            self._ensure_kwin_mouseclick_loaded()
+            effects.reconfigureEffect(KWIN_CLICK_EFFECT)
+            deadline = time.monotonic() + 2.0
+            actual = None
+            while time.monotonic() < deadline:
+                actual = self._kwin_mouseclick_state()
+                if actual is True:
+                    break
+                time.sleep(0.05)
+            if actual is not True:
                 raise RuntimeError(
-                    "KWin не подтвердил состояние анимации щелчков "
-                    "через Effects.supportInformation('mouseclick')."
+                    "KWin загрузил пользовательский эффект, но не подтвердил его состояние. "
+                    "Проверьте совместимость плагина с версией KWin 6.3.6."
                 )
-        elif actual is None:
-            raise RuntimeError(
-                "KWin загрузил mouseclick, но не сообщил его состояние. "
-                "Настройка не отмечена как применённая."
-            )
+        else:
+            if bool(effects.isEffectLoaded(KWIN_CLICK_EFFECT)):
+                effects.unloadEffect(KWIN_CLICK_EFFECT)
+            for _ in range(40):
+                if not bool(effects.isEffectLoaded(KWIN_CLICK_EFFECT)):
+                    break
+                time.sleep(0.05)
+            if bool(effects.isEffectLoaded(KWIN_CLICK_EFFECT)):
+                raise RuntimeError("KWin не подтвердил выгрузку podsvetka-click.")
 
         self.cfg["_kwin_click_effect_enabled"] = enabled
         self.cfg["_kwin_click_session"] = (
@@ -653,7 +625,10 @@ class App:
         )
         if persist:
             save_settings(self.cfg)
-        log("Анимация щелчков KWin: " + ("включена" if enabled else "выключена"))
+        log(
+            "Одиночная анимация щелчков KWin: "
+            + ("включена" if enabled else "выключена")
+        )
 
     def configure_kwin_script(self, enabled):
         """Enable or disable the installed KWin package script by its plugin id."""
