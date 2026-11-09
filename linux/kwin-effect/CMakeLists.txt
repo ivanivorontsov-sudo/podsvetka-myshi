@@ -12,8 +12,11 @@ include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 include(ECMSetupQtPluginMacroNames)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets DBus Quick)
 find_package(KF6CoreAddons REQUIRED)
+find_package(KF6Config REQUIRED)
+find_package(KF6WindowSystem REQUIRED)
+find_package(Wayland REQUIRED COMPONENTS Server)
 find_package(KWin REQUIRED)
 
 ecm_setup_qtplugin_macro_names(
