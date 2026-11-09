@@ -80,7 +80,7 @@ def rgb(value):
 def parse_kwin_mouseclick_state(report):
     """Return MouseClickEffect.enabled from KWin's textual property dump."""
     match = re.search(
-        r"(?im)^\\s*enabled\\s*:\\s*(true|false|1|0|yes|no|on|off)\\s*$",
+        r"(?im)^\s*enabled\s*:\s*(true|false|1|0|yes|no|on|off)\s*$",
         str(report),
     )
     if not match:
