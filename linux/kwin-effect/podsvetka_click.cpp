@@ -37,12 +37,6 @@ public:
         reconfigure(ReconfigureAll);
         connect(effects, &EffectsHandler::mouseChanged,
                 this, &PodsvetkaClickEffect::slotMouseChanged);
-        effects->startMousePolling();
-    }
-
-    ~PodsvetkaClickEffect() override
-    {
-        effects->stopMousePolling();
     }
 
     void reconfigure(ReconfigureFlags) override
