@@ -81,7 +81,7 @@ jobs:
             echo "DIAGNOSTIC"
             /usr/bin/python3 linux/podsvetka_myshi.py --diagnose
             echo "START APP"
-            /usr/bin/python3 linux/podsvetka_myshi.py &
+            /usr/bin/python3 linux/podsvetka_myshi.py --settings &
             APP_PID=$!
             FOUND=0
             for _ in $(seq 1 30); do
@@ -99,7 +99,17 @@ jobs:
             done
             echo "OVERLAY FOUND=$FOUND"
             test "$FOUND" -eq 1
-            echo "STOP APP"
+            DIALOG_FOUND=0
+            for _ in $(seq 1 30); do
+              if xwininfo -root -tree 2>/dev/null | grep -Fq "Настройки — Подсветка мыши"; then
+                DIALOG_FOUND=1
+                break
+              fi
+              sleep 0.2
+            done
+            echo "SETTINGS DIALOG FOUND=$DIALOG_FOUND"
+            test "$DIALOG_FOUND" -eq 1
+            echo "STOP APP WHILE SETTINGS DIALOG IS OPEN"
             /usr/bin/python3 linux/podsvetka_myshi.py --quit
             timeout 5s tail --pid="$APP_PID" -f /dev/null
             wait "$APP_PID"
@@ -109,7 +119,7 @@ jobs:
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.1.4"
+          VERSION="1.1.5"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi" "$PKG/usr/share/kwin/scripts/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
