@@ -38,11 +38,17 @@ jobs:
           grep -q 'workspace.cursorPosChanged' linux/kwin-script/contents/code/main.js
           grep -q 'SetCursorPosition' linux/kwin-script/contents/code/main.js
           grep -q 'ring_alpha' linux/podsvetka_myshi.py
-          grep -q 'Effect-mouseclick' linux/podsvetka_myshi.py
-          grep -q '"RingSize"' linux/podsvetka_myshi.py
-          grep -q 'ToggleMouseClick' linux/podsvetka_myshi.py
+          grep -q 'KWIN_CLICK_EFFECT = "podsvetka-click"' linux/podsvetka_myshi.py
+          grep -q 'isEffectSupported(KWIN_CLICK_EFFECT)' linux/podsvetka_myshi.py
+          grep -q 'supportInformation(KWIN_CLICK_EFFECT)' linux/podsvetka_myshi.py
           grep -q 'def _ensure_kwin_mouseclick_loaded' linux/podsvetka_myshi.py
-          grep -q 'supportInformation("mouseclick")' linux/podsvetka_myshi.py
+          grep -q 'Effect-podsvetka-click' linux/podsvetka_myshi.py
+          grep -q 'KWIN_EFFECT_FACTORY(PodsvetkaClickEffect' linux/kwin-effect/podsvetka_click.cpp
+          grep -q 'pressedNow' linux/kwin-effect/podsvetka_click.cpp
+          ! grep -q 'isReleased' linux/kwin-effect/podsvetka_click.cpp
+          ! grep -q 'oldButtons.*m_ringLife' linux/kwin-effect/podsvetka_click.cpp
+          grep -q 'startMousePolling' linux/kwin-effect/podsvetka_click.cpp
+          grep -q 'KWin::kwin' linux/kwin-effect/CMakeLists.txt
           grep -q 'ANIMATION_STYLES' linux/podsvetka_myshi.py
           grep -q 'set_animation_style' linux/podsvetka_myshi.py
           grep -q 'RadioMenuItem.new_with_label' linux/podsvetka_myshi.py
@@ -116,10 +122,26 @@ jobs:
             APP_PID=""
           '
 
+      - name: Сборка press-only KWin effect для Debian 13 / KWin 6.3.6
+        run: |
+          set -euo pipefail
+          mkdir -p build/deb
+          docker run --rm -v "$PWD:/work" -w /work debian:trixie-slim bash -eu -c '
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              build-essential cmake ninja-build extra-cmake-modules kwin-dev \
+              qt6-base-dev libkf6coreaddons-dev
+            cmake -S linux/kwin-effect -B build/kwin-effect -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+            cmake --build build/kwin-effect --parallel 2
+            DESTDIR=/work/build/deb cmake --install build/kwin-effect
+            test -n "$(find /work/build/deb -type f -name "*podsvetka-click*.so" -print -quit)"
+          '
+
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.1.5"
+          VERSION="1.2.0"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi" "$PKG/usr/share/kwin/scripts/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
@@ -148,23 +170,27 @@ jobs:
           Version: ${VERSION}
           Section: utils
           Priority: optional
-          Architecture: all
+          Architecture: amd64
           Maintainer: Ivan Vorontsov
           Depends: python3, python3-gi, gir1.2-gtk-3.0, python3-cairo, python3-gi-cairo, python3-xlib, python3-dbus, xwayland
+          Suggests: libkwin6 (>= 4:6.3.6), libkwin6 (<< 4:6.4)
           Description: Mouse cursor highlight for X11 and KDE Wayland desktops
            Russian-language utility with a translucent cursor glow and click ripples.
+           KDE Wayland uses a KWin effect that draws one animation on mouse button-down only.
            Supports X11/Xorg and KDE Plasma Wayland (KWin via XWayland and D-Bus).
           EOF
-          dpkg-deb --root-owner-group --build "$PKG" "build/podsvetka-myshi_${VERSION}_all.deb"
-          sha256sum "build/podsvetka-myshi_${VERSION}_all.deb" > "build/podsvetka-myshi_${VERSION}_all.deb.sha256"
+          dpkg-deb --root-owner-group --build "$PKG" "build/podsvetka-myshi_${VERSION}_amd64.deb"
+          dpkg-deb --info "build/podsvetka-myshi_${VERSION}_amd64.deb"
+          find "$PKG" -type f -name "*podsvetka-click*.so" -exec ldd {} ;
+          sha256sum "build/podsvetka-myshi_${VERSION}_amd64.deb" > "build/podsvetka-myshi_${VERSION}_amd64.deb.sha256"
 
       - name: Загрузить Debian-пакет
         uses: actions/upload-artifact@v4
         with:
           name: podsvetka-myshi-linux-deb
           path: |
-            build/podsvetka-myshi_*_all.deb
-            build/podsvetka-myshi_*_all.deb.sha256
+            build/podsvetka-myshi_*_amd64.deb
+            build/podsvetka-myshi_*_amd64.deb.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -173,4 +199,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" build/podsvetka-myshi_*_all.deb build/podsvetka-myshi_*_all.deb.sha256 --clobber
+          gh release upload "${GITHUB_REF_NAME}" build/podsvetka-myshi_*_amd64.deb build/podsvetka-myshi_*_amd64.deb.sha256 --clobber
