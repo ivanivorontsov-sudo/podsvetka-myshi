@@ -130,8 +130,8 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work debian:trixie-slim bash -eu -c '
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              build-essential cmake ninja-build extra-cmake-modules kwin-dev \
-              qt6-base-dev libkf6coreaddons-dev
+              build-essential cmake ninja-build extra-cmake-modules kwin-dev libepoxy-dev \
+              qt6-base-dev libkf6coreaddons-dev libkf6config-dev
             cmake -S linux/kwin-effect -B build/kwin-effect -G Ninja \
               -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
             cmake --build build/kwin-effect --parallel 2
