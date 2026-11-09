@@ -44,6 +44,9 @@ jobs:
           grep -q 'def _ensure_kwin_mouseclick_loaded' linux/podsvetka_myshi.py
           grep -q 'supportInformation("mouseclick")' linux/podsvetka_myshi.py
           grep -q 'ANIMATION_STYLES' linux/podsvetka_myshi.py
+          grep -q 'set_animation_style' linux/podsvetka_myshi.py
+          grep -q 'RadioMenuItem.new_with_label' linux/podsvetka_myshi.py
+          grep -q 'Анимация щелчков' linux/podsvetka_myshi.py
           grep -q 'animation_style' linux/podsvetka_myshi.py
           grep -q 'Одиночный импульс — без паутины' linux/podsvetka_myshi.py
           grep -q 'RingCount.*ANIMATION_STYLES' linux/podsvetka_myshi.py
@@ -106,7 +109,7 @@ jobs:
       - name: Сборка Debian-пакета
         run: |
           set -euo pipefail
-          VERSION="1.1.3"
+          VERSION="1.1.4"
           PKG="build/deb"
           mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/podsvetka-myshi" "$PKG/usr/bin" "$PKG/usr/share/applications" "$PKG/usr/share/doc/podsvetka-myshi" "$PKG/usr/share/kwin/scripts/podsvetka-myshi"
           install -m 755 linux/podsvetka_myshi.py "$PKG/usr/lib/podsvetka-myshi/podsvetka_myshi.py"
