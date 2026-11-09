@@ -14,3 +14,9 @@
 - Added a direct “Анимация щелчков” submenu to the tray icon context menu.
 - The three presets (single ring, double ripple, layered ripple) are selectable as radio items and apply immediately.
 - The settings dialog retains the same selector.
+
+
+## 1.1.5 — 2026-11-09
+- Fixed clean application shutdown while the settings dialog or an error dialog is open.
+- The shutdown routine now responds to active modal dialogs before quitting the main GTK loop, allowing the process to release its instance lock.
+- CI now opens the settings dialog during the GUI smoke test and verifies that the application exits through --quit.
