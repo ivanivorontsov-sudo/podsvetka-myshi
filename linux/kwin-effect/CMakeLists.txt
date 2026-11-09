@@ -10,6 +10,7 @@ list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH} ${ECM_KDE_MODULE_DIR} ${ECM_FIN
 include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
+include(ECMSetupQtPluginMacroNames)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui)
 find_package(KF6CoreAddons REQUIRED)
