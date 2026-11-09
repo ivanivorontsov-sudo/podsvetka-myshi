@@ -128,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/deb
-          docker run --rm -v "$PWD:/work" -w /work debian:trixie-slim bash -eu -c '
+          docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -v "$PWD:/work" -w /work debian:trixie-slim bash -eu -c '
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
               build-essential cmake ninja-build extra-cmake-modules kwin-dev libepoxy-dev \
@@ -139,7 +139,7 @@ jobs:
             cmake --build build/kwin-effect --parallel 2
             DESTDIR=/work/build/deb cmake --install build/kwin-effect
             test -f /work/build/deb/usr/lib/x86_64-linux-gnu/qt6/plugins/kwin/effects/plugins/podsvetka-click.so
-            chown -R "$(id -u):$(id -g)" /work/build/deb
+            chown -R "$HOST_UID:$HOST_GID" /work/build/deb
           '
 
       - name: Сборка Debian-пакета
